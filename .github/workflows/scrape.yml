@@ -1,0 +1,160 @@
+# =============================================================================
+#  cHAP Seller Tracker — unattended scrape
+#  ---------------------------------------------------------------------------
+#  Runs scraper.py on GitHub-hosted Ubuntu runners twice daily (12 AM + 12 PM
+#  IST), commits the freshly-scraped results/ directory back to the repo on
+#  `main`. Streamlit Cloud listens for the push and auto-redeploys the
+#  dashboard, so stakeholders see new data within a few minutes of each run.
+#
+#  Why GitHub Actions (vs. cron on a laptop):
+#      Cron on a laptop requires the machine to be awake AND online at the
+#      firing moment — a closed-lid laptop simply misses the run. GitHub's
+#      hosted runners are always on, zero maintenance.
+#
+#  Secrets required (Settings → Secrets and variables → Actions):
+#      LOGIN_URL
+#      APP_1_ID, APP_1_USER, APP_1_PASS          # shopify_temu (TEMU US)
+#      APP_2_ID, APP_2_USER, APP_2_PASS          # shein
+#      APP_3_ID, APP_3_USER, APP_3_PASS          # shopify_temu_eu
+#      SUPABASE_URL, SUPABASE_KEY                # (optional) if you later
+#                                                  wire the pipeline to push
+#                                                  to Supabase in addition to
+#                                                  committing CSVs
+#
+#  Schedule (both UTC — GitHub Actions cron is always UTC):
+#      30 18 * * *   → 00:00 IST (midnight India)
+#      30 06 * * *   → 12:00 IST (noon India)
+# =============================================================================
+
+name: scrape-chap
+
+on:
+  schedule:
+    # NOTE: GitHub Actions cron is UTC only — there's no way to declare IST
+    # at the workflow level. These two entries are IST 00:00 / 12:00.
+    - cron: "30 18 * * *"   # 00:00 IST = previous-day 18:30 UTC
+    - cron: "30 6 * * *"    # 12:00 IST = same-day 06:30 UTC
+  workflow_dispatch:
+    # Manual-run button: handy after a secret rotation, a scraper fix, or
+    # when a stakeholder asks for a fresh number right now.
+    inputs:
+      reason:
+        description: "Why this manual run?"
+        required: false
+        default: "on-demand"
+
+# Prevent overlapping runs. If a scheduled run is still going when the next
+# one fires (shouldn't, but possible on a slow day), cancel the older one —
+# we always want the most recent data.
+concurrency:
+  group: scrape-chap-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write   # needed to git push the results/ folder back
+
+jobs:
+  scrape:
+    name: Scrape and commit
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Drop test-store emails before persisting so we don't accidentally ship
+    # internal stores to anywhere downstream. The scraper handles this but
+    # we also set it here so a future pipeline.py invocation respects it.
+    env:
+      PYTHONUNBUFFERED: "1"
+      HEADLESS: "true"
+      LOGIN_URL: ${{ secrets.LOGIN_URL }}
+      APP_1_ID: ${{ secrets.APP_1_ID }}
+      APP_1_USER: ${{ secrets.APP_1_USER }}
+      APP_1_PASS: ${{ secrets.APP_1_PASS }}
+      APP_2_ID: ${{ secrets.APP_2_ID }}
+      APP_2_USER: ${{ secrets.APP_2_USER }}
+      APP_2_PASS: ${{ secrets.APP_2_PASS }}
+      APP_3_ID: ${{ secrets.APP_3_ID }}
+      APP_3_USER: ${{ secrets.APP_3_USER }}
+      APP_3_PASS: ${{ secrets.APP_3_PASS }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+    defaults:
+      run:
+        # scraper.py and its siblings are at the root of the "Admin Panel
+        # Scrapper" folder. If you move the project into a subfolder of the
+        # repo later, just change this line.
+        working-directory: "./Admin Panel Scrapper"
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "Admin Panel Scrapper/requirements.txt"
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright Chromium + OS deps
+        # `--with-deps` pulls the ~20 apt packages Chromium needs on Ubuntu.
+        # Faster than installing them manually; always matches the Playwright
+        # version pinned in requirements.txt.
+        run: |
+          python -m playwright install --with-deps chromium
+
+      - name: Run scraper
+        # scraper.py writes results/latest/ and results/history/<stamp>/. On
+        # non-zero exit the job fails and nothing is committed — the prior
+        # snapshot stays authoritative until the next successful run.
+        run: |
+          python scraper.py
+
+      - name: Summarize fresh run
+        # Quick health check so the Actions log shows counts at a glance
+        # without needing to dig through run.json.
+        run: |
+          python - <<'PY'
+          import json, pathlib
+          p = pathlib.Path("results/latest/run.json")
+          if not p.exists():
+              print("run.json missing — scraper likely failed")
+              raise SystemExit(1)
+          data = json.loads(p.read_text())
+          print("run stamp:", data.get("run_stamp"))
+          for name, rows in (data.get("data") or {}).items():
+              plans = sum(1 for r in rows if (r.get("plan") or "").strip())
+              print(f"  {name}: {len(rows)} rows, plan populated {plans}/{len(rows)}")
+          PY
+
+      - name: Commit results back to main
+        # Only commit if something actually changed. --allow-empty=false
+        # ensures we skip a no-op commit if the scrape produced identical data.
+        run: |
+          cd "${GITHUB_WORKSPACE}"
+          git config user.name "chap-scraper-bot"
+          git config user.email "chap-scraper-bot@users.noreply.github.com"
+          git add "Admin Panel Scrapper/results/"
+          if git diff --cached --quiet; then
+            echo "No changes in results/ — skipping commit."
+            exit 0
+          fi
+          STAMP=$(date -u +"%Y-%m-%d_%H-%M-%SZ")
+          git commit -m "chore(data): scrape ${STAMP}"
+          git push origin HEAD:main
+
+      - name: Upload logs + debug artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraper-debug-${{ github.run_id }}
+          path: |
+            Admin Panel Scrapper/debug_dom_*.txt
+            Admin Panel Scrapper/error_*.png
+            Admin Panel Scrapper/logs/
+          if-no-files-found: ignore
+          retention-days: 14

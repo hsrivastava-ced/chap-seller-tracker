@@ -1,0 +1,25 @@
+# Core runtime dependencies for the cHAP scraper + analytics pipeline.
+# Pinned to versions that were current as of 2026-04-18; bump with care.
+
+playwright>=1.45.0,<2.0.0
+python-dotenv>=1.0.1,<2.0.0
+supabase>=2.7.0,<3.0.0
+pandas>=2.2.0,<3.0.0
+# Required when the runtime environment uses a SOCKS proxy (CI, sandboxed
+# shells). supabase-py's internal httpx client errors at construction time
+# without this even if your connection is plain HTTPS.
+httpx[socks]>=0.27.0
+
+# Dashboard (Phase 5) — required for `streamlit run dashboard.py`. Plotly
+# backs the Install Trend / Installs-vs-Uninstalls / stacked-bar charts
+# introduced in the Apr 2026 redesign (see project_chap_dashboard_redesign
+# memory note).
+streamlit>=1.36.0,<2.0.0
+plotly>=5.20.0,<7.0.0
+
+# Dev dependencies — not imported by the runtime pipeline. Uncomment
+# when setting up a contributor venv:
+#   pip install -r requirements.txt pytest
+# Test suite lives in tests/ and is pure-Python (no Playwright, no
+# network), so `python3 -m pytest tests/` is the one-liner to run it.
+# pytest>=8.0,<9.0
