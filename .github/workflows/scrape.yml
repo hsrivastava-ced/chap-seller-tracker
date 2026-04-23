@@ -117,14 +117,19 @@ jobs:
           source <(printf '%s\n' "$CREDS")
           set +a
           # Sanity: if even one required key is still empty, bail loud.
+          # LOGIN_URL can come from either its own secret OR from inside
+          # CREDS — sourcing CREDS overrides the top-level env if it
+          # contains a LOGIN_URL line, so either path works.
           missing=()
-          for v in APP_1_ID APP_1_USER APP_1_PASS \
+          for v in LOGIN_URL \
+                   APP_1_ID APP_1_USER APP_1_PASS \
                    APP_2_ID APP_2_USER APP_2_PASS \
                    APP_3_ID APP_3_USER APP_3_PASS ; do
             if [ -z "${!v:-}" ]; then missing+=("$v"); fi
           done
           if [ ${#missing[@]} -ne 0 ]; then
-            echo "::error::CREDS is missing keys: ${missing[*]}"
+            echo "::error::Missing required env keys: ${missing[*]}"
+            echo "::error::Set them either as GitHub secrets or as lines inside the CREDS secret (KEY=\"value\" format)."
             exit 1
           fi
           python scraper.py
