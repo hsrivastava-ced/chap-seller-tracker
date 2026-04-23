@@ -65,14 +65,12 @@ jobs:
     env:
       PYTHONUNBUFFERED: "1"
       HEADLESS: "true"
-      LOGIN_URL: ${{ secrets.LOGIN_URL }}
-      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
-      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
-      # Single bundled secret holding the 9 per-app env lines
-      # (APP_1_ID/USER/PASS ... APP_3_ID/USER/PASS) in dotenv format.
-      # Easier for humans to paste once than to click 9 separate secrets.
-      # Unpacked into the shell env by the "Run scraper" step.
-      CREDS: ${{ secrets.CREDS }}
+      # Credentials (LOGIN_URL, APP_*_*, SUPABASE_*) are unpacked from the
+      # bundled CREDS secret (and top-level LOGIN_URL/SUPABASE_* secrets
+      # as fallbacks) by the "Unpack CREDS into job env" step below. That
+      # step writes to $GITHUB_ENV so every subsequent step inherits them,
+      # without ever letting bash see the raw values (which can contain
+      # `$`, backticks, and other shell-special characters).
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -95,43 +93,118 @@ jobs:
         run: |
           python -m playwright install --with-deps chromium
 
+      - name: Unpack CREDS into job env (Python parse — no shell interpolation)
+        # The CREDS secret holds KEY="value" lines (APP_1_ID/USER/PASS
+        # through APP_3_*, optionally LOGIN_URL / SUPABASE_*). We parse
+        # it in Python rather than `source`ing it in bash because the
+        # passwords legitimately contain shell-special characters like
+        # `$`, backticks, and backslashes. Bash `source` would interpret
+        # e.g. `VY2$pi9AT@%i!1u` as containing a `$pi9AT` variable
+        # reference and silently mangle the password to `VY2@%i!1u`,
+        # which the login server then rejects.
+        #
+        # Output: writes each parsed KEY=value to $GITHUB_ENV so the
+        # next step's `python scraper.py` sees them via os.getenv().
+        # GitHub parses $GITHUB_ENV literally — no shell interpolation —
+        # so special characters round-trip intact. We use the multiline
+        # heredoc format (KEY<<DELIM ... DELIM) for maximum safety with
+        # any character that could appear in a password.
+        shell: bash
+        env:
+          CREDS: ${{ secrets.CREDS }}
+          LOGIN_URL_TOP: ${{ secrets.LOGIN_URL }}
+          SUPABASE_URL_TOP: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY_TOP: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          set -e
+          python - <<'PY'
+          import os, re, sys, secrets as _secrets
+
+          creds = os.environ.get("CREDS", "")
+          if not creds.strip():
+              print("::error::CREDS secret is empty — set it under Settings → Secrets and variables → Actions.")
+              sys.exit(1)
+
+          # Parse dotenv-style KEY=value / KEY="value" / KEY='value' lines.
+          # NO shell expansion — values are taken literally.
+          parsed = {}
+          line_re = re.compile(
+              r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$'
+          )
+          for raw in creds.splitlines():
+              line = raw.rstrip("\r")
+              if not line.strip() or line.lstrip().startswith("#"):
+                  continue
+              m = line_re.match(line)
+              if not m:
+                  continue
+              key, val = m.group(1), m.group(2)
+              # Strip surrounding matching quotes, if any.
+              if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
+                  val = val[1:-1]
+              parsed[key] = val
+
+          # Fill in any top-level secrets the CREDS block didn't set.
+          for k, envk in (
+              ("LOGIN_URL",    "LOGIN_URL_TOP"),
+              ("SUPABASE_URL", "SUPABASE_URL_TOP"),
+              ("SUPABASE_KEY", "SUPABASE_KEY_TOP"),
+          ):
+              if not parsed.get(k):
+                  v = os.environ.get(envk, "")
+                  if v:
+                      parsed[k] = v
+
+          # Preflight: fail loudly if anything critical is still missing.
+          required = [
+              "LOGIN_URL",
+              "APP_1_ID", "APP_1_USER", "APP_1_PASS",
+              "APP_2_ID", "APP_2_USER", "APP_2_PASS",
+              "APP_3_ID", "APP_3_USER", "APP_3_PASS",
+          ]
+          missing = [k for k in required if not parsed.get(k)]
+          if missing:
+              print(f"::error::Missing required env keys: {', '.join(missing)}")
+              print('::error::Put them inside the CREDS secret as KEY="value" lines, or set LOGIN_URL as its own secret.')
+              sys.exit(1)
+
+          # Append to $GITHUB_ENV so subsequent steps inherit these vars.
+          # Multiline heredoc syntax: KEY<<DELIMITER \n <value> \n DELIMITER
+          # The delimiter must not appear inside the value — use a random
+          # per-run token to guarantee that.
+          gh_env_path = os.environ.get("GITHUB_ENV")
+          if not gh_env_path:
+              print("::error::GITHUB_ENV not set — are we running on GitHub Actions?")
+              sys.exit(1)
+
+          with open(gh_env_path, "a", encoding="utf-8") as f:
+              for k, v in parsed.items():
+                  delim = "EOF_" + _secrets.token_hex(8)
+                  # Paranoia — if the random delimiter somehow clashes
+                  # with the value, regenerate.
+                  while delim in v:
+                      delim = "EOF_" + _secrets.token_hex(8)
+                  f.write(f"{k}<<{delim}\n{v}\n{delim}\n")
+
+          # Diagnostic: lengths only, never values. Lengths help us
+          # verify the right password made it through without revealing
+          # anything meaningful in the log.
+          print("Unpacked CREDS keys (value lengths only):")
+          for k in sorted(parsed):
+              print(f"  {k}: len={len(parsed[k])}")
+          PY
+
       - name: Run scraper
         # scraper.py writes results/latest/ and results/history/<stamp>/.
         # On non-zero exit the job fails and nothing is committed — the
         # prior snapshot stays authoritative until the next successful run.
-        #
-        # The CREDS secret is a bundled dotenv-style block holding the 9
-        # per-app values (APP_1_ID/USER/PASS through APP_3_*). We source
-        # it into the current shell so scraper.py's `config.py`
-        # (load_dotenv + os.getenv) resolves every app.
+        # Credentials are inherited from $GITHUB_ENV set in the previous
+        # step; config.py's os.getenv() picks them up directly, and
+        # python-dotenv's load_dotenv() is a no-op (it never overrides
+        # existing env vars unless override=True is passed).
         shell: bash
         run: |
           set -e
-          if [ -z "${CREDS:-}" ]; then
-            echo "::error::CREDS secret is empty — set it under Settings → Secrets and variables → Actions."
-            exit 1
-          fi
-          # `set -a` auto-exports every var sourced below. The CREDS
-          # value uses KEY="value" lines, which `source` parses natively.
-          set -a
-          source <(printf '%s\n' "$CREDS")
-          set +a
-          # Sanity: if even one required key is still empty, bail loud.
-          # LOGIN_URL can come from either its own secret OR from inside
-          # CREDS — sourcing CREDS overrides the top-level env if it
-          # contains a LOGIN_URL line, so either path works.
-          missing=()
-          for v in LOGIN_URL \
-                   APP_1_ID APP_1_USER APP_1_PASS \
-                   APP_2_ID APP_2_USER APP_2_PASS \
-                   APP_3_ID APP_3_USER APP_3_PASS ; do
-            if [ -z "${!v:-}" ]; then missing+=("$v"); fi
-          done
-          if [ ${#missing[@]} -ne 0 ]; then
-            echo "::error::Missing required env keys: ${missing[*]}"
-            echo "::error::Set them either as GitHub secrets or as lines inside the CREDS secret (KEY=\"value\" format)."
-            exit 1
-          fi
           python scraper.py
 
       - name: Summarize fresh run
