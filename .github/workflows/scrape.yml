@@ -66,17 +66,13 @@ jobs:
       PYTHONUNBUFFERED: "1"
       HEADLESS: "true"
       LOGIN_URL: ${{ secrets.LOGIN_URL }}
-      APP_1_ID: ${{ secrets.APP_1_ID }}
-      APP_1_USER: ${{ secrets.APP_1_USER }}
-      APP_1_PASS: ${{ secrets.APP_1_PASS }}
-      APP_2_ID: ${{ secrets.APP_2_ID }}
-      APP_2_USER: ${{ secrets.APP_2_USER }}
-      APP_2_PASS: ${{ secrets.APP_2_PASS }}
-      APP_3_ID: ${{ secrets.APP_3_ID }}
-      APP_3_USER: ${{ secrets.APP_3_USER }}
-      APP_3_PASS: ${{ secrets.APP_3_PASS }}
       SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
       SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+      # Single bundled secret holding the 9 per-app env lines
+      # (APP_1_ID/USER/PASS ... APP_3_ID/USER/PASS) in dotenv format.
+      # Easier for humans to paste once than to click 9 separate secrets.
+      # Unpacked into the shell env by the "Run scraper" step.
+      CREDS: ${{ secrets.CREDS }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
@@ -103,7 +99,34 @@ jobs:
         # scraper.py writes results/latest/ and results/history/<stamp>/.
         # On non-zero exit the job fails and nothing is committed — the
         # prior snapshot stays authoritative until the next successful run.
+        #
+        # The CREDS secret is a bundled dotenv-style block holding the 9
+        # per-app values (APP_1_ID/USER/PASS through APP_3_*). We source
+        # it into the current shell so scraper.py's `config.py`
+        # (load_dotenv + os.getenv) resolves every app.
+        shell: bash
         run: |
+          set -e
+          if [ -z "${CREDS:-}" ]; then
+            echo "::error::CREDS secret is empty — set it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+          # `set -a` auto-exports every var sourced below. The CREDS
+          # value uses KEY="value" lines, which `source` parses natively.
+          set -a
+          source <(printf '%s\n' "$CREDS")
+          set +a
+          # Sanity: if even one required key is still empty, bail loud.
+          missing=()
+          for v in APP_1_ID APP_1_USER APP_1_PASS \
+                   APP_2_ID APP_2_USER APP_2_PASS \
+                   APP_3_ID APP_3_USER APP_3_PASS ; do
+            if [ -z "${!v:-}" ]; then missing+=("$v"); fi
+          done
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::CREDS is missing keys: ${missing[*]}"
+            exit 1
+          fi
           python scraper.py
 
       - name: Summarize fresh run
