@@ -446,6 +446,12 @@ def _plotly_layout(
         paper_bgcolor="rgba(0,0,0,0)",
         plot_bgcolor="rgba(0,0,0,0)",
         showlegend=show_legend,
+        # dragmode=False — nukes click-drag box-zoom / pan gestures at the
+        # layout level. Combined with PLOTLY_CONFIG's scrollZoom=False and
+        # per-axis fixedrange=True below, the chart becomes pan/zoom-inert
+        # (exactly what stakeholders asked for after seeing bars warp on
+        # scroll on both desktop and mobile).
+        dragmode=False,
         legend=dict(
             orientation="h",
             yanchor="top", y=-0.18,
@@ -457,10 +463,12 @@ def _plotly_layout(
         xaxis=dict(
             showgrid=False,
             tickfont=dict(size=11, color=PALETTE["text_soft"]),
+            fixedrange=True,
         ),
         yaxis=dict(
             gridcolor="#e5e7eb",
             tickfont=dict(size=11, color=PALETTE["text_soft"]),
+            fixedrange=True,
         ),
     )
     return fig
@@ -487,24 +495,53 @@ def _install_trend_figure(monthly: dict, apps_to_plot: list[str]) -> go.Figure:
     return _plotly_layout(fig, height=320)
 
 
-def _installs_vs_uninstalls_figure(monthly: dict) -> go.Figure:
+def _installs_vs_uninstalls_figure(
+    monthly: dict,
+    app_key: str = "all_apps",
+    highlight_period: str | None = None,
+) -> go.Figure:
     """Green bars for installs, red bars below the axis for uninstalls.
-    Matches the reference 'Installs vs Uninstalls' widget shape."""
+    Matches the reference 'Installs vs Uninstalls' widget shape.
+
+    `app_key` — which per-app series to render. Respecting this fixes the
+    old bug where the chart was always the combined 'all_apps' totals
+    even when the user had picked SHEIN only.
+
+    `highlight_period` — if set (e.g. '2026-02'), that month's bars are
+    drawn in a deeper saturated color so the user can *see* which month
+    the Month filter selected. Makes the filter change visibly land on
+    the chart without having to stare at the KPI cards.
+    """
     periods = monthly.get("periods", [])
     x = [fmt_month_short(p) for p in periods]
-    inst = [monthly["installs"].get("all_apps", {}).get(p, 0) for p in periods]
-    unin = [-monthly["uninstalls"].get("all_apps", {}).get(p, 0) for p in periods]
+    inst = [monthly["installs"].get(app_key, {}).get(p, 0) for p in periods]
+    unin = [-monthly["uninstalls"].get(app_key, {}).get(p, 0) for p in periods]
+
+    # Deeper / lighter color per bar depending on whether it matches the
+    # highlighted month. If no highlight, every bar uses the "soft"
+    # fill — same look as before this change.
+    inst_colors = [
+        PALETTE["success"] if highlight_period and p == highlight_period
+        else PALETTE["success_soft"]
+        for p in periods
+    ]
+    unin_colors = [
+        PALETTE["danger"] if highlight_period and p == highlight_period
+        else PALETTE["danger_soft"]
+        for p in periods
+    ]
+
     fig = go.Figure()
     fig.add_trace(go.Bar(
         x=x, y=inst,
         name="Installs",
-        marker_color=PALETTE["success_soft"],
+        marker_color=inst_colors,
         hovertemplate="<b>%{x}</b><br>Installs: %{y}<extra></extra>",
     ))
     fig.add_trace(go.Bar(
         x=x, y=unin,
         name="Uninstalls",
-        marker_color=PALETTE["danger_soft"],
+        marker_color=unin_colors,
         hovertemplate="<b>%{x}</b><br>Uninstalls: %{customdata}<extra></extra>",
         customdata=[abs(v) for v in unin],
     ))
@@ -695,6 +732,17 @@ PLOTLY_CONFIG = {
         "zoomOut2d", "autoScale2d", "hoverClosestCartesian",
         "hoverCompareCartesian", "toggleSpikelines",
     ],
+    # Lock out every zoom/pan gesture. The modebar buttons are already
+    # removed above, but these flags also disable:
+    #   - mouse-wheel scroll-zoom on desktop
+    #   - two-finger pinch-zoom on mobile
+    #   - click-drag to select a rectangle to zoom into
+    # Stakeholders reported bars reshaping when scrolling; a static chart
+    # with hover tooltips + a PNG export button is all they need.
+    "scrollZoom": False,
+    "doubleClick": False,
+    "showAxisDragHandles": False,
+    "showAxisRangeEntryBoxes": False,
     "toImageButtonOptions": {
         "format": "png",
         "filename": "chap-dashboard-panel",
@@ -1038,14 +1086,48 @@ def _kpi_row(
     )
 
 
-def _trend_panels(stake: dict, app_key: str) -> None:
+def _trend_panels(stake: dict, app_key: str, month_key: str | None = None) -> None:
     """Two side-by-side panels: Installs trend line + Installs/Uninstalls bars.
-    Matches the reference 'Revenue Trend' + 'Installs vs Uninstalls' duo."""
+    Matches the reference 'Revenue Trend' + 'Installs vs Uninstalls' duo.
+
+    When `month_key` is set, that month's bars are drawn in the deeper /
+    saturated shade on the Installs-vs-Uninstalls chart so the month filter
+    is *visibly* represented on the chart — not just in the KPI cards.
+    The full time series still renders so stakeholders can eyeball how
+    the highlighted month compares to its neighbors.
+    """
     apps_for_lines = (
         [a for a in APP_KEYS if a != "all_apps"]
         if app_key == "all_apps"
         else [app_key]
     )
+    # Decide which monthly series to render on the right-hand (bar) chart.
+    # 'All Apps' view shows the combined total so stakeholders see the
+    # whole picture; a single-app view shows just that app.
+    ivu_app = "all_apps" if app_key == "all_apps" else app_key
+
+    # Subtitle text spells out what each counting rule actually is. The
+    # per-seller dedup note lives here because the user called it out
+    # explicitly: a seller who removed both Shopify + Shein in the same
+    # month should be ONE uninstall event, not two. (Fixed 2026-04-24.)
+    if app_key == "all_apps":
+        ivu_sub = (
+            "Green bars = sellers who installed that month, summed across "
+            "all three apps. Red bars (below the axis) = sellers who "
+            "uninstalled, also summed across apps. A seller is counted "
+            "once per app per month — removing Shopify + Shein in the "
+            "same month is 1 uninstall on SHEIN, not 2."
+        )
+    else:
+        ivu_sub = (
+            f"Green bars = sellers who newly installed {display_name(app_key)} "
+            "that month. Red bars (below the axis) = sellers who uninstalled. "
+            "A seller who removed multiple platforms in the same month is "
+            "counted once."
+        )
+    if month_key is not None:
+        ivu_sub += f" · Highlighted month: **{fmt_month_short(month_key)}**."
+
     col1, col2 = st.columns(2)
     with col1:
         _panel_open(
@@ -1070,14 +1152,11 @@ def _trend_panels(stake: dict, app_key: str) -> None:
                       f"install_trend_{app_key}.csv")
         _panel_close()
     with col2:
-        _panel_open(
-            "Installs vs Uninstalls",
-            "Green bars = sellers who installed that month. "
-            "Red bars (below the axis) = sellers who uninstalled. "
-            "Net direction tells you whether the month was a gain or a loss.",
-        )
+        _panel_open("Installs vs Uninstalls", ivu_sub)
         st.plotly_chart(
-            _installs_vs_uninstalls_figure(stake["monthly"]),
+            _installs_vs_uninstalls_figure(
+                stake["monthly"], app_key=ivu_app, highlight_period=month_key,
+            ),
             use_container_width=True,
             config=PLOTLY_CONFIG,
         )
@@ -1086,11 +1165,11 @@ def _trend_panels(stake: dict, app_key: str) -> None:
         for p in stake["monthly"].get("periods", []):
             ivu_rows.append({
                 "Month": fmt_month_short(p),
-                "Installs": installs.get("all_apps", {}).get(p, 0),
-                "Uninstalls": uninstalls.get("all_apps", {}).get(p, 0),
+                "Installs": installs.get(ivu_app, {}).get(p, 0),
+                "Uninstalls": uninstalls.get(ivu_app, {}).get(p, 0),
             })
         _download_csv(pd.DataFrame.from_records(ivu_rows),
-                      "installs_vs_uninstalls.csv")
+                      f"installs_vs_uninstalls_{app_key}.csv")
         _panel_close()
 
 
@@ -1657,7 +1736,10 @@ def main() -> None:
     st.write("")
 
     # ------------ Trend duo ------------
-    _trend_panels(stake, app_key)
+    # Passing month_key lets the Installs vs Uninstalls bars highlight the
+    # selected month so the sidebar filter is visibly reflected on the chart
+    # (user flagged the filter 'does nothing' when only KPIs updated).
+    _trend_panels(stake, app_key, month_key=month_key)
 
     # ------------ Paid vs Not Paid ------------
     _paid_panel(stake, app_key)

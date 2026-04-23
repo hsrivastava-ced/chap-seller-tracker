@@ -315,18 +315,48 @@ def _timeseries_counts(
     rows: Iterable[dict],
     date_field: str,
     period_fn,
+    *,
+    dedup_field: str | None = None,
 ) -> dict[str, int]:
     """Count rows bucketed by the period derived from `date_field`.
 
     Rows whose date field doesn't parse are silently skipped — they're
     already logged by `normalize.normalize_date` on the way in, so we
-    don't repeat the warning here."""
+    don't repeat the warning here.
+
+    `dedup_field` — if set, count each distinct value of this field only
+    once per (period, value) pair. Used for uninstalls: the scraper emits
+    one row per (seller_id, platform) because a seller can uninstall
+    Shopify + Shein at different timestamps. Stakeholders want to see
+    "one seller left us in March" as one event, not two.
+    Passing ``dedup_field="seller_id"`` collapses both rows into a
+    single March count, regardless of how many platforms were removed.
+    """
     buckets: Counter = Counter()
-    for r in rows or []:
-        d = _parse_iso_date(r.get(date_field))
-        if d is None:
-            continue
-        buckets[period_fn(d)] += 1
+    if dedup_field:
+        seen: dict[str, set] = defaultdict(set)
+        for r in rows or []:
+            d = _parse_iso_date(r.get(date_field))
+            if d is None:
+                continue
+            key = (r.get(dedup_field) or "").strip()
+            if not key:
+                # No id to dedupe by — still count (better to over-report
+                # than silently drop). Rare in practice; all uninstall
+                # rows carry a seller_id.
+                buckets[period_fn(d)] += 1
+                continue
+            period = period_fn(d)
+            if key in seen[period]:
+                continue
+            seen[period].add(key)
+            buckets[period] += 1
+    else:
+        for r in rows or []:
+            d = _parse_iso_date(r.get(date_field))
+            if d is None:
+                continue
+            buckets[period_fn(d)] += 1
     return dict(buckets)
 
 
@@ -368,7 +398,13 @@ def timeseries_by_period(
     for app, rows in (sellers_by_app or {}).items():
         installs_by_app[app] = _timeseries_counts(rows, "installed_on", period_fn)
     for app, rows in (uninstalls_by_app or {}).items():
-        unins_by_app[app] = _timeseries_counts(rows, "uninstalled_on", period_fn)
+        # Dedupe by seller_id so a seller who removed Shopify + Shein in
+        # the same month counts as ONE uninstall event, not two. The raw
+        # CSV emits one row per (seller, platform) for Supabase-upsert
+        # ergonomics, but stakeholder-facing counts should be per-seller.
+        unins_by_app[app] = _timeseries_counts(
+            rows, "uninstalled_on", period_fn, dedup_field="seller_id"
+        )
 
     # Determine the global time span so every series is gap-filled
     # consistently. If either dict is completely empty we skip filling.

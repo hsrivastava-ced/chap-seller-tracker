@@ -726,7 +726,7 @@ def _scrape_paginated_ant_table(
             page.wait_for_selector(
                 "tr.ant-table-row, .ant-empty, .inte-emptyState, "
                 ".ant-table-tbody tr.ant-table-row, .inte-table tbody tr",
-                timeout=15000,
+                timeout=30000,
             )
         except PwTimeout as wait_err:
             shot = f"error_scrape_{safe_label}_p{page_num}.png"
@@ -937,7 +937,7 @@ def _scrape_paginated_ant_table(
                     page.wait_for_selector(
                         "div.inte-flex.inte-flex--spacing-MediumTight "
                         ".inte-Pagination--PageCount",
-                        timeout=20000,
+                        timeout=30000,
                         state="visible",
                     )
                     pag_row = page.locator(
@@ -1007,6 +1007,44 @@ def _scrape_paginated_ant_table(
         except Exception:
             pass
 
+        # Belt-and-braces: dismiss any lingering inte-select popup before
+        # clicking Next. The perPage-Sorter popup has been observed
+        # sticking in `aria-expanded="true"` AFTER an option click,
+        # overlaying the Next button in the same pagination footer and
+        # causing silent no-op clicks. Pressing Escape is a cheap,
+        # idempotent way to dismiss it — if nothing is open, Escape is a
+        # no-op in the inte-select code path.
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        try:
+            page.evaluate(
+                """() => {
+                    // Only force-close the perPage sorter popup specifically;
+                    // we don't want to interfere with other inte-selects on
+                    // the page (e.g. Customize Grid, if reopened).
+                    const w = document.querySelector(
+                        'div.inte-Pagination-perPage--Sorter '
+                        + 'div.inte-formElement--Wrap'
+                    );
+                    if (w && w.getAttribute('aria-expanded') === 'true') {
+                        w.setAttribute('aria-expanded', 'false');
+                    }
+                    document.querySelectorAll(
+                        'div.inte-Pagination-perPage--Sorter '
+                        + 'div.inte-select--Fake'
+                    ).forEach(el => {
+                        if (el.style.opacity !== '0') {
+                            el.style.visibility = 'hidden';
+                            el.style.opacity = '0';
+                        }
+                    });
+                }"""
+            )
+        except Exception:
+            pass
+
         def _click_next_and_wait(prev_key: str, timeout_ms: int) -> bool:
             """Click the Next button and wait up to `timeout_ms` for the
             first-row data-row-key to change. Returns True on success.
@@ -1067,7 +1105,7 @@ def _scrape_paginated_ant_table(
         # First attempt: click Next and wait up to 25s. Shein's seller
         # endpoint has been observed taking ~11-12s/page on a good run but
         # occasionally >25s on a slow one. 25s covers the common slow case.
-        refreshed = _click_next_and_wait(prev_first_key, timeout_ms=25000)
+        refreshed = _click_next_and_wait(prev_first_key, timeout_ms=60000)
         was_retry = False
 
         # If the table didn't refresh, the most common causes are:
@@ -1116,7 +1154,7 @@ def _scrape_paginated_ant_table(
                             return r && r.getAttribute('data-row-key') !== prev;
                         }""",
                         arg=prev_first_key,
-                        timeout=8000,
+                        timeout=15000,
                     )
                     logging.info(
                         "   ↳ table flipped during 8s grace period — "
@@ -1130,7 +1168,7 @@ def _scrape_paginated_ant_table(
                         "(click was likely a genuine no-op)."
                     )
                     refreshed = _click_next_and_wait(
-                        prev_first_key, timeout_ms=30000
+                        prev_first_key, timeout_ms=60000
                     )
                     was_retry = True
 
@@ -1819,6 +1857,70 @@ def set_page_size_100(page, app_name: str) -> bool:
         except Exception as err2:
             logging.warning(f"   ↳ force-click on '100' also failed ({err2})")
             return False
+
+    # --- Force the popup closed ---
+    # CRITICAL (2026-04-24): The inte-select popup does NOT auto-close on
+    # option-click in the perPage Sorter — verified against a live debug
+    # DOM dump where `.inte-select--Fake` retained `visibility:visible;
+    # opacity:1` and the wrapper kept `aria-expanded="true"` AFTER the
+    # '100' click. That leaves an invisible-looking but hit-testable
+    # overlay sitting directly on top of the pagination Next button
+    # (both are in the `.inte-Pagination` footer). Every subsequent
+    # Next click then lands on the popup (a silent no-op), the table
+    # never advances past page 1, and the scraper bails after the
+    # 2-click retry window — bleeding all rows past row 20 on every
+    # app. Symptom: shein captures 20 instead of 349, temu 20 instead
+    # of 84, temu_eu 20 instead of 41.
+    #
+    # Fix: press Escape + wait for aria-expanded to flip back to "false".
+    # If Escape doesn't take (some inte-select builds only listen for
+    # click-outside, not keyup), fall through to the JS force-close
+    # below. We avoid synthesizing a mouse-click on the page to dismiss
+    # the popup because misplacing it by a few pixels could click the
+    # Prev button or another pagination control.
+    try:
+        page.keyboard.press("Escape")
+    except Exception:
+        pass
+    try:
+        page.wait_for_function(
+            """() => {
+                const w = document.querySelector(
+                    'div.inte-Pagination-perPage--Sorter '
+                    + 'div.inte-formElement--Wrap'
+                );
+                if (!w) return true;  // wrapper gone? treat as closed
+                return w.getAttribute('aria-expanded') !== 'true';
+            }""",
+            timeout=3000,
+        )
+    except PwTimeout:
+        logging.warning(
+            f"   ↳ page-size popup never reported aria-expanded=false for "
+            f"{app_name}; forcing via JS"
+        )
+        # Last-resort: toggle inline style + aria-expanded ourselves so
+        # the paginator isn't overlaid. This is ugly but safe — we are
+        # only modifying presentation, not firing any React handlers.
+        try:
+            page.evaluate(
+                """() => {
+                    const w = document.querySelector(
+                        'div.inte-Pagination-perPage--Sorter '
+                        + 'div.inte-formElement--Wrap'
+                    );
+                    if (w) w.setAttribute('aria-expanded', 'false');
+                    document.querySelectorAll(
+                        'div.inte-Pagination-perPage--Sorter '
+                        + 'div.inte-select--Fake'
+                    ).forEach(el => {
+                        el.style.visibility = 'hidden';
+                        el.style.opacity = '0';
+                    });
+                }"""
+            )
+        except Exception:
+            pass
 
     # --- Wait for the selected text to flip to "100" ---
     # This is a pure React state flip — no network needed for the label
