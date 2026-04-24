@@ -52,7 +52,13 @@ on:
 
 concurrency:
   group: scrape-chap-${{ github.ref }}
-  cancel-in-progress: true
+  # Queue, don't cancel. Scrapes gather data — cancelling a run that's
+  # already logged into cHAP and paginated through sellers would drop
+  # work we can't replay cheaply. The admin-UI onboarding flow dispatches
+  # a scrape, and if the super admin then clicks "Run scrape now" before
+  # it finishes, we want BOTH runs to execute (queued), not the newer
+  # one stomping the first.
+  cancel-in-progress: false
 
 permissions:
   contents: write
