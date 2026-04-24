@@ -219,13 +219,25 @@ def fmt_month(key: str) -> str:
         return key
 
 
+_MONTH_NAMES = (
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+    "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+)
+
+
 def fmt_month_short(key: str) -> str:
-    """'2026-04' → '04/26' (mm/yy). The stakeholder PDF mockup asks
-    for this compact form in every axis label. Invalid input passes
-    through untouched."""
+    """'2026-04' → 'Apr 2026'. Previously returned '04/26' which
+    stakeholders flagged as ambiguous — was it month 4 of year 2026 or
+    April of 1926? Full month name + 4-digit year removes that
+    guesswork at the cost of a slightly wider tick label. Plotly
+    handles the extra width by rotating ticks on tight axes.
+    Invalid input passes through untouched."""
     try:
         y, m = key.split("-")
-        return f"{int(m):02d}/{int(y) % 100:02d}"
+        month_idx = int(m) - 1
+        if 0 <= month_idx < 12:
+            return f"{_MONTH_NAMES[month_idx]} {int(y):04d}"
+        return key
     except (ValueError, IndexError):
         return key
 

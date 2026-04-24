@@ -729,28 +729,19 @@ def _download_csv(df: pd.DataFrame, filename: str, *, label: str = "⬇ Download
 # clutter the top-right corner of each card.
 PLOTLY_CONFIG = {
     "displaylogo": False,
-    "displayModeBar": True,
-    "modeBarButtonsToRemove": [
-        "pan2d", "zoom2d", "select2d", "lasso2d", "zoomIn2d",
-        "zoomOut2d", "autoScale2d", "hoverClosestCartesian",
-        "hoverCompareCartesian", "toggleSpikelines",
-    ],
-    # Lock out every zoom/pan gesture. The modebar buttons are already
-    # removed above, but these flags also disable:
-    #   - mouse-wheel scroll-zoom on desktop
-    #   - two-finger pinch-zoom on mobile
-    #   - click-drag to select a rectangle to zoom into
-    # Stakeholders reported bars reshaping when scrolling; a static chart
-    # with hover tooltips + a PNG export button is all they need.
+    # Hide the mode bar entirely. The previous config removed specific
+    # buttons and disabled scrollZoom, but stakeholders still managed to
+    # accidentally trigger zoom via trackpad gestures / pinch / rogue
+    # buttons that slipped through the filter. Killing the whole bar is
+    # the cleanest fix — hover tooltips still work for reading values,
+    # and PNG export will come back as an explicit per-panel button later.
+    "displayModeBar": False,
+    # Belt-and-braces: even without the modebar, these flags stop
+    # stray mouse-wheel / pinch / double-click from warping the plot.
     "scrollZoom": False,
     "doubleClick": False,
     "showAxisDragHandles": False,
     "showAxisRangeEntryBoxes": False,
-    "toImageButtonOptions": {
-        "format": "png",
-        "filename": "chap-dashboard-panel",
-        "scale": 2,
-    },
 }
 
 
@@ -1129,22 +1120,35 @@ def _trend_panels(stake: dict, app_key: str, month_key: str | None = None) -> No
             "counted once."
         )
     if month_key is not None:
-        ivu_sub += f" · Highlighted month: **{fmt_month_short(month_key)}**."
+        ivu_sub += (
+            f" · Narrowed to the 12 months ending **{fmt_month_short(month_key)}**."
+        )
+
+    # Narrow the data window when a specific month is picked. Previous
+    # behavior showed the full history with the picked month highlighted
+    # — stakeholders asked for the chart to actually respect the filter,
+    # not just annotate it. 12-month window keeps enough context that
+    # trends remain readable while honoring the user's selection.
+    monthly_view = _narrow_monthly(stake["monthly"], month_key, window=12)
+    axis_note = (
+        f"x-axis: months (ending {fmt_month_short(month_key)})"
+        if month_key else "x-axis: all months with data"
+    )
 
     col1, col2 = st.columns(2)
     with col1:
         _panel_open(
             "Install Trend",
-            "How many sellers newly installed the app each month. "
-            "One line per app; x-axis is mm/yy.",
+            f"How many sellers newly installed the app each month. "
+            f"One line per app; {axis_note}.",
         )
         st.plotly_chart(
-            _install_trend_figure(stake["monthly"], apps_for_lines),
+            _install_trend_figure(monthly_view, apps_for_lines),
             use_container_width=True,
             config=PLOTLY_CONFIG,
         )
-        periods = stake["monthly"].get("periods", [])
-        installs = stake["monthly"].get("installs", {})
+        periods = monthly_view.get("periods", [])
+        installs = monthly_view.get("installs", {})
         trend_rows = []
         for p in periods:
             row = {"Month": fmt_month_short(p)}
@@ -1158,14 +1162,14 @@ def _trend_panels(stake: dict, app_key: str, month_key: str | None = None) -> No
         _panel_open("Installs vs Uninstalls", ivu_sub)
         st.plotly_chart(
             _installs_vs_uninstalls_figure(
-                stake["monthly"], app_key=ivu_app, highlight_period=month_key,
+                monthly_view, app_key=ivu_app, highlight_period=month_key,
             ),
             use_container_width=True,
             config=PLOTLY_CONFIG,
         )
-        uninstalls = stake["monthly"].get("uninstalls", {})
+        uninstalls = monthly_view.get("uninstalls", {})
         ivu_rows = []
-        for p in stake["monthly"].get("periods", []):
+        for p in monthly_view.get("periods", []):
             ivu_rows.append({
                 "Month": fmt_month_short(p),
                 "Installs": installs.get(ivu_app, {}).get(p, 0),
@@ -1174,6 +1178,20 @@ def _trend_panels(stake: dict, app_key: str, month_key: str | None = None) -> No
         _download_csv(pd.DataFrame.from_records(ivu_rows),
                       f"installs_vs_uninstalls_{app_key}.csv")
         _panel_close()
+
+
+def _narrow_monthly(monthly: dict, month_key: str | None, *, window: int = 12) -> dict:
+    """Return a shallow copy of `monthly` with `periods` clipped to a
+    window ending at month_key. When month_key is None or absent from
+    periods, returns monthly unchanged."""
+    if not month_key:
+        return monthly
+    periods = monthly.get("periods", []) or []
+    if month_key not in periods:
+        return monthly
+    end = periods.index(month_key) + 1
+    start = max(0, end - window)
+    return {**monthly, "periods": periods[start:end]}
 
 
 def _paid_panel(stake: dict, app_key: str) -> None:
@@ -1693,7 +1711,7 @@ def main() -> None:
     if roles.can(principal, "see_admin_tab"):
         with st.sidebar:
             st.page_link(
-                "pages/Admin.py",
+                "admin_ui.py",
                 label="⚙ Admin panel",
                 help="Add new scraper sources and (super admin) manage users.",
             )
