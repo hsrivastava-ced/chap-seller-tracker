@@ -1853,14 +1853,14 @@ def main() -> None:
     APP_KEYS.clear()
     APP_KEYS.extend(discovered)
 
-    # Which apps the data actually has — sidebar multiselect is sourced
-    # from this so we never offer apps the dataset doesn't include.
-    available_apps = [
-        a for a in APP_KEYS
-        if a != "all_apps" and (
-            (sellers_by_app or {}).get(a) or (unins_by_app or {}).get(a)
-        )
-    ]
+    # Sidebar multiselect offers every REGISTERED app, even ones that
+    # haven't been scraped into results/latest yet. Otherwise a newly
+    # onboarded app (shein_woocommerce, shopify_gearexchange) is
+    # invisible on the Dashboard until its first successful scrape
+    # commits — which is exactly when the user wants to check on it.
+    # Apps without data render as empty charts / zero KPIs, which is
+    # correct (and obvious) rather than the app being silently absent.
+    available_apps = [a for a in APP_KEYS if a != "all_apps"]
     if not available_apps:
         # First-ever run or empty dataset — fall back to the registry
         # order so the multiselect isn't empty.

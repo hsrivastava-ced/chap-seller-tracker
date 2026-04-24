@@ -56,18 +56,45 @@ PALETTE: dict[str, str] = {
 _SHARED_CSS = f"""
 <style>
 /* ---- sidebar — dark slate, same across Admin + Dashboard ---- */
-section[data-testid="stSidebar"] {{
-    background-color: {PALETTE["sidebar_bg"]};
+/* !important is required here because Streamlit's built-in theme
+   (secondaryBackgroundColor) wins specificity otherwise and forces
+   a light-gray sidebar. Cover both stSidebar and its inner content
+   wrapper since the outer selector only reaches the panel. */
+section[data-testid="stSidebar"],
+section[data-testid="stSidebar"] > div,
+div[data-testid="stSidebarContent"],
+section[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {{
+    background-color: {PALETTE["sidebar_bg"]} !important;
 }}
+/* Text + icons inside the sidebar → light. */
+section[data-testid="stSidebar"],
 section[data-testid="stSidebar"] * {{
-    color: {PALETTE["sidebar_text"]};
+    color: {PALETTE["sidebar_text"]} !important;
 }}
+/* Filter labels / captions / help icons — softer muted. */
 section[data-testid="stSidebar"] label,
-section[data-testid="stSidebar"] .stCaption {{
+section[data-testid="stSidebar"] [data-testid="stCaptionContainer"],
+section[data-testid="stSidebar"] small {{
     color: {PALETTE["sidebar_muted"]} !important;
 }}
-section[data-testid="stSidebar"] a {{
+/* Links (page links, admin link) — lighter indigo so they're visible
+   against the dark slate. */
+section[data-testid="stSidebar"] a,
+section[data-testid="stSidebar"] a span {{
     color: {PALETTE["primary_soft"]} !important;
+}}
+/* Form inputs INSIDE the sidebar need to stay readable — keep their
+   own light-gray surface so user input is visible, not the dark slate. */
+section[data-testid="stSidebar"] input,
+section[data-testid="stSidebar"] textarea,
+section[data-testid="stSidebar"] [data-baseweb="select"] > div,
+section[data-testid="stSidebar"] [data-baseweb="tag"] {{
+    background-color: #334155 !important;
+    color: #f1f5f9 !important;
+    border-color: #475569 !important;
+}}
+section[data-testid="stSidebar"] [data-baseweb="select"] svg {{
+    fill: #cbd5e1 !important;
 }}
 
 /* ---- primary buttons — indigo, matches theme primary ---- */
@@ -82,8 +109,8 @@ button[kind="primary"]:hover {{
 
 /* ---- tab strip — subtle underline, consistent across pages ---- */
 div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {{
-    color: {PALETTE["primary"]};
-    border-bottom-color: {PALETTE["primary"]};
+    color: {PALETTE["primary"]} !important;
+    border-bottom-color: {PALETTE["primary"]} !important;
 }}
 </style>
 """
