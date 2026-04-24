@@ -429,6 +429,16 @@ def _render_profile(profile) -> None:
     origin = {"claude": "AI (fresh)", "cache": "cached", "dry_run": "dry-run"}.get(
         profile.source, profile.source
     )
+    # Build the "no categories" fallback OUTSIDE the f-string — PEP 701
+    # (backslashes inside f-expressions) only lands in Python 3.12, and
+    # Streamlit Cloud pins 3.11. Keeping this snippet as a regular
+    # string means the same code runs on both.
+    empty_cats = (
+        '<span style="color:#64748b">No categories parsed</span>'
+    )
+    cats_block = cat_html or empty_cats
+    insight_text = profile.insight or "—"
+    opportunity_text = profile.opportunity or "—"
     st.markdown(
         f'<div style="padding:14px 18px; margin-top:8px; '
         f'background:#0f172a; border-radius:10px; border:1px solid #334155;">'
@@ -437,11 +447,11 @@ def _render_profile(profile) -> None:
         f'font-weight:600;">Business type · {origin}</div>'
         f'<div style="color:#f1f5f9; font-size:1.3rem; font-weight:700; '
         f'margin:4px 0 10px;">{profile.business_type}</div>'
-        f'<div>{cat_html or "<span style=\'color:#64748b\'>No categories parsed</span>"}</div>'
+        f'<div>{cats_block}</div>'
         f'<div style="margin-top:12px; color:#cbd5e1; font-size:0.92rem; '
-        f'line-height:1.5;"><b>Insight:</b> {profile.insight or "—"}</div>'
+        f'line-height:1.5;"><b>Insight:</b> {insight_text}</div>'
         f'<div style="margin-top:8px; color:#a5b4fc; font-size:0.92rem; '
-        f'line-height:1.5;"><b>Opportunity:</b> {profile.opportunity or "—"}</div>'
+        f'line-height:1.5;"><b>Opportunity:</b> {opportunity_text}</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
