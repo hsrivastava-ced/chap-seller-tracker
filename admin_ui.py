@@ -107,6 +107,34 @@ FREQ_CHOICES: dict[str, dict] = {
 }
 
 
+# Schedule options presented in the Add-new-app form. The first entry is
+# the default (shared with the main scrape.yml cron — no per-app
+# workflow file created). The others each commit a dedicated
+# .github/workflows/scrape_<app_id>.yml running on its own cron.
+_ADD_APP_SCHEDULE_CHOICES: dict[str, dict] = {
+    "Shared schedule — runs with other apps (twice daily, 00:00 & 12:00 IST)": {
+        "shared": True,
+        "cron": None,
+        "summary": "shared 12h",
+    },
+    "Solo — every 6 hours (4× per day)": {
+        "shared": False,
+        "cron": "0 */6 * * *",
+        "summary": "every 6 hours",
+    },
+    "Solo — once a day at 00:00 IST": {
+        "shared": False,
+        "cron": "30 18 * * *",
+        "summary": "daily at 00:00 IST",
+    },
+    "Solo — once a day at 12:00 IST": {
+        "shared": False,
+        "cron": "30 6 * * *",
+        "summary": "daily at 12:00 IST",
+    },
+}
+
+
 # =================================================================
 # Page entry
 # =================================================================
@@ -276,6 +304,26 @@ def _render_add_app_wizard(principal: roles.UserPrincipal):
                 help="Sellers who uninstalled this app (churn tracking).",
             )
 
+        # --- Schedule routing ------------------------------------------
+        st.markdown("**How often should this app be scraped?**")
+        st.caption(
+            "Pick the shared schedule (default) to run alongside the other "
+            "existing apps twice a day — simplest option. Pick a solo "
+            "schedule to isolate this app in its own GitHub Actions "
+            "workflow with its own cron, so its load doesn't stack with "
+            "the others (useful if cHAP's backend struggles)."
+        )
+        schedule_choice = st.selectbox(
+            "Schedule",
+            options=list(_ADD_APP_SCHEDULE_CHOICES.keys()),
+            index=0,
+            help=(
+                "The shared schedule runs 00:00 and 12:00 IST. Solo "
+                "schedules get their own `.github/workflows/scrape_<app>.yml` "
+                "committed automatically."
+            ),
+        )
+
         run_after = st.checkbox(
             "Dispatch a test scrape right after adding",
             value=True,
@@ -318,6 +366,7 @@ def _render_add_app_wizard(principal: roles.UserPrincipal):
         wants_installs=wants_installs,
         wants_uninstalls=wants_uninstalls,
         run_after=run_after,
+        schedule_choice=schedule_choice,
     )
 
 
@@ -332,13 +381,25 @@ def _commit_new_app(
     wants_installs: bool,
     wants_uninstalls: bool,
     run_after: bool,
+    schedule_choice: str,
 ) -> None:
     """Do the three GitHub writes + optional dispatch. Shows per-step status.
 
     Each app's credentials live in their OWN repo secrets (APP_N_USER,
     APP_N_PASS). We write them directly — no bundle round-trip, no
     paste-back step. The workflow reads them via toJSON(secrets).
+
+    Schedule routing:
+      - "Shared schedule" (default): entry.shared_schedule = True, no
+        per-app workflow file. scraper.py's main loop scrapes it on
+        the shared 12h cron.
+      - "Solo" variants: commits `.github/workflows/scrape_<app_id>.yml`
+        with a dedicated cron. scraper.py skips the app on the shared
+        cron so it isn't double-scraped.
     """
+    sched = _ADD_APP_SCHEDULE_CHOICES.get(schedule_choice) or {}
+    shared_schedule = bool(sched.get("shared", True))
+    solo_cron = sched.get("cron")
     try:
         ctx = gh.context_from_streamlit(st)
     except Exception as e:
@@ -391,6 +452,7 @@ def _commit_new_app(
                 added_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 # First real scrape will flip this to canonical/pending_review/blocked.
                 schema_status="pending_review",
+                shared_schedule=shared_schedule,
             )
             current_yaml = gh.read_file(ctx, "apps.yaml")
             data = yaml.safe_load(current_yaml or "") or {"schema_version": 1, "apps": []}
@@ -420,7 +482,54 @@ def _commit_new_app(
             )
             return
 
-    # 3. (optional) workflow dispatch — scoped to the NEW app only so
+    # 3. (optional) per-app workflow file — only when the user picked a
+    # solo schedule. Commits `.github/workflows/scrape_<app_id>.yml` so
+    # the app runs on its own cron, isolated from the shared sweep.
+    solo_workflow_line = ""
+    if not shared_schedule and solo_cron:
+        with st.status("Creating dedicated workflow…", expanded=False) as status:
+            try:
+                wf_path = f".github/workflows/scrape_{app_id}.yml"
+                wf_body = _render_per_app_workflow_yaml(
+                    app_id=app_id,
+                    cron=solo_cron,
+                    label=name,
+                    cron_summary=sched.get("summary", solo_cron),
+                )
+                gh.put_file(
+                    ctx,
+                    wf_path,
+                    wf_body,
+                    f"feat(scrape): dedicated workflow for {app_id} "
+                    f"({sched.get('summary', solo_cron)}) "
+                    f"({roles.audit_stamp(principal.email, 'add per-app workflow')})",
+                )
+                status.update(
+                    label=f"Dedicated workflow committed ({sched.get('summary', 'solo')})",
+                    state="complete",
+                )
+                solo_workflow_line = (
+                    f" Dedicated workflow: "
+                    f"`.github/workflows/scrape_{app_id}.yml` "
+                    f"(runs {sched.get('summary', solo_cron)})."
+                )
+            except Exception as e:
+                status.update(label="Workflow create failed", state="error")
+                show_warning(
+                    "Couldn't create the per-app workflow file.",
+                    hint=(
+                        "The app is registered and the credentials are "
+                        "saved. The main shared-schedule scrape will still "
+                        "pick it up (since shared_schedule defaults to "
+                        "True on failure). If you want the solo schedule, "
+                        "check that the GitHub PAT has "
+                        "**Workflows: Read and write** permission and "
+                        "re-run the add."
+                    ),
+                    cause=e,
+                )
+
+    # 4. (optional) workflow dispatch — scoped to the NEW app only so
     # onboarding doesn't trigger a full re-scrape of every configured app
     # (which would hammer cHAP's MongoDB unnecessarily).
     if run_after:
@@ -437,15 +546,170 @@ def _commit_new_app(
         except Exception as e:
             dispatch_line = f" (Added, but scrape dispatch failed: {e})"
     else:
-        dispatch_line = " Scrape will run at the next scheduled tick (00:00 / 12:00 IST)."
+        if shared_schedule:
+            dispatch_line = " Scrape will run at the next shared tick (00:00 / 12:00 IST)."
+        else:
+            dispatch_line = f" Scrape will run on its solo schedule ({sched.get('summary', 'configured')})."
 
     # Stash banner + rerun so the apps table above refreshes (Streamlit
     # Cloud has a small delay before the redeploy picks up apps.yaml; the
     # local app_registry read may still show the old list until then).
     st.session_state["_add_app_success"] = (
-        f"✅ **{name}** added as `{entry.id}` (schema: pending_review until first scrape).{dispatch_line}"
+        f"✅ **{name}** added as `{entry.id}` "
+        f"(schema: pending_review until first scrape).{solo_workflow_line}{dispatch_line}"
     )
     st.rerun()
+
+
+def _render_per_app_workflow_yaml(
+    *, app_id: str, cron: str, label: str, cron_summary: str
+) -> str:
+    """Generate the YAML for a per-app scrape workflow.
+
+    This is near-identical to `.github/workflows/scrape.yml` except:
+      - name is `scrape-<app_id>` so each workflow shows distinctly
+        in the Actions tab
+      - only ONE cron entry (the user's choice), vs the shared twice-daily
+      - TARGET_APP env var is baked into the Run step so the scraper
+        only hits this one app
+      - artifact upload uses an app-scoped name so multiple solo workflows
+        don't collide on artifact naming
+
+    The secret-unpack, preflight, commit, and debug-upload steps are
+    copy-pasted from the shared workflow so they stay in lockstep. If
+    the shared workflow evolves, per-app files won't auto-update —
+    that's a conscious tradeoff for simplicity. Admin can regenerate
+    by re-onboarding the app (or we can add a "regenerate" button later).
+    """
+    # keep the cron double-quoted in YAML so special chars round-trip safe
+    cron_q = cron.replace('"', '\\"')
+    return f"""# =============================================================================
+#  Auto-generated per-app scrape workflow for {app_id}.
+#  Runs on its OWN cron ({cron_summary}) so it doesn't stack with the
+#  shared scrape.yml. Generated by the admin UI — if you edit by hand,
+#  re-onboarding the app will overwrite your changes.
+# =============================================================================
+
+name: scrape-{app_id}
+
+on:
+  schedule:
+    - cron: "{cron_q}"   # {cron_summary}
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why this manual run?"
+        required: false
+        default: "on-demand"
+
+concurrency:
+  group: scrape-{app_id}-${{{{ github.ref }}}}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    name: Scrape {label} ({app_id})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONUNBUFFERED: "1"
+      HEADLESS: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: "requirements.txt"
+
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Install Playwright Chromium
+        run: python -m playwright install --with-deps chromium
+
+      - name: Unpack repo secrets into job env
+        shell: bash
+        env:
+          SECRETS_JSON: ${{{{ toJSON(secrets) }}}}
+        run: |
+          set -e
+          python - <<'PY'
+          import os, json, sys, secrets as _secrets
+          data = json.loads(os.environ.get("SECRETS_JSON") or "{{}}")
+          required = ["LOGIN_URL", "{app_id.upper()}_USER_placeholder", "{app_id.upper()}_PASS_placeholder"]
+          # Derive the real required keys from apps.yaml so this file
+          # doesn't hardcode APP_N_* for the specific app.
+          import yaml
+          try:
+              registry = yaml.safe_load(open("apps.yaml")) or {{}}
+          except Exception as err:
+              print(f"::error::Couldn't read apps.yaml: {{err}}")
+              sys.exit(1)
+          required = ["LOGIN_URL"]
+          for app in (registry.get("apps") or []):
+              if app.get("id") != "{app_id}":
+                  continue
+              ref = (app.get("creds_ref") or "").strip()
+              if ref:
+                  required.extend([f"{{ref}}_USER", f"{{ref}}_PASS"])
+          unpacked = {{k: data[k] for k in required if data.get(k)}}
+          missing = [k for k in required if not unpacked.get(k)]
+          if missing:
+              print(f"::error::Missing required secrets: {{', '.join(missing)}}")
+              sys.exit(1)
+          gh_env = os.environ.get("GITHUB_ENV")
+          with open(gh_env, "a", encoding="utf-8") as f:
+              for k, v in unpacked.items():
+                  delim = "EOF_" + _secrets.token_hex(8)
+                  while delim in (v or ""):
+                      delim = "EOF_" + _secrets.token_hex(8)
+                  f.write(f"{{k}}<<{{delim}}\\n{{v}}\\n{{delim}}\\n")
+          print("Unpacked keys (value lengths only):")
+          for k in sorted(unpacked):
+              print(f"  {{k}}: len={{len(unpacked[k])}}")
+          PY
+
+      - name: Run scraper (target={app_id})
+        shell: bash
+        env:
+          TARGET_APP: "{app_id}"
+        run: |
+          set -e
+          python scraper.py
+
+      - name: Commit results back to main
+        run: |
+          git config user.name "chap-scraper-bot"
+          git config user.email "chap-scraper-bot@users.noreply.github.com"
+          git add results/
+          if git diff --cached --quiet; then
+            echo "No changes in results/ — skipping commit."
+            exit 0
+          fi
+          STAMP=$(date -u +"%Y-%m-%d_%H-%M-%SZ")
+          git commit -m "chore(data): scrape {app_id} ${{STAMP}}"
+          git push origin HEAD:main
+
+      - name: Upload debug artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scraper-{app_id}-debug-${{{{ github.run_id }}}}
+          path: |
+            debug_dom_*.txt
+            error_*.png
+          if-no-files-found: ignore
+          retention-days: 14
+"""
 
 
 # =================================================================

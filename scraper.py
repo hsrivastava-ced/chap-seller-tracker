@@ -2414,6 +2414,16 @@ def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS)
 
+        # Apps with shared_schedule=False live in their own workflow
+        # file and run on their own cron. The shared scrape.yml should
+        # NOT also scrape them (double-hitting cHAP's backend). When
+        # TARGET_APP is set, that override wins — a targeted dispatch
+        # should always honor the request regardless of routing.
+        import app_registry as _ar
+        _solo_ids = {
+            a.id for a in _ar.all_apps() if not a.shared_schedule
+        }
+
         all_sellers = {}
         all_uninstalls = {}
         for app_name, app_id in APP_IDS.items():
@@ -2426,6 +2436,14 @@ def main():
             if target_app and target_app not in (app_name, app_id):
                 logging.info(
                     f"⏭  Skipping '{app_name}' — TARGET_APP='{target_app}'."
+                )
+                continue
+            # Solo-schedule app (own workflow file). Only skip when we're
+            # NOT running a targeted dispatch for it.
+            if not target_app and app_id in _solo_ids:
+                logging.info(
+                    f"⏭  Skipping '{app_name}' — runs on its own schedule "
+                    f"(see .github/workflows/scrape_{app_id}.yml)."
                 )
                 continue
             user, pwd = CREDENTIALS.get(app_id, (None, None))

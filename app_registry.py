@@ -78,6 +78,14 @@ class AppEntry:
     added_at: str = ""
     schema_status: str = "canonical"      # canonical | pending_review | blocked
     notes: str = ""
+    # ---- schedule routing ----
+    # When True (the default), this app is scraped by the shared
+    # .github/workflows/scrape.yml that runs twice a day. When False,
+    # it has its own dedicated workflow file (scrape_<id>.yml) with its
+    # own cron — admin UI generates that file on onboard if the user
+    # chose a non-default frequency, and the main scrape.yml skips the
+    # app so it doesn't get double-scraped.
+    shared_schedule: bool = True
 
     # ---- derived ----
     @property
