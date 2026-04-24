@@ -2497,6 +2497,8 @@ def persist_results(
     uninstalls_by_app: dict | None = None,
     stamp: str | None = None,
     promote_latest: bool = True,
+    *,
+    is_targeted: bool = False,
 ) -> dict:
     """
     Write per-app seller + uninstall CSVs (latest + history) and a combined
@@ -2523,6 +2525,13 @@ def persist_results(
     When `promote_latest=False` the previous `latest/` is left untouched so
     consumers keep reading the last-good snapshot. This is the guardrail
     that lets scrape_validator refuse a partially-corrupt run.
+
+    `is_targeted=True` (set by main() when TARGET_APP scoped the run to a
+    single app) flips on merge-mode: the previous `latest/run.json` is
+    read and any apps NOT in this run's `sellers_by_app` are preserved
+    verbatim. CSVs for non-targeted apps are also left alone. Without
+    this, an admin-UI "Run scrape now" for one app would wipe the other
+    apps' data from the dashboard until the next shared cron.
 
     Returns a dict with the paths written, so main() can log them clearly.
     """
@@ -2564,11 +2573,40 @@ def persist_results(
         _write_csv(hist_path, rows, UNINSTALL_CSV_COLUMNS)
         written["history"][key] = str(hist_path)
 
-    # One combined JSON per run — has metadata + all rows, good for feeding
-    # straight into the Supabase upsert step later. Kept backwards-compatible
-    # with the earlier shape by keeping a top-level `counts` + `total` (for
-    # sellers), while adding an `uninstalls` section beside them.
-    run_json = {
+    # For targeted runs that promote to latest/, merge with the existing
+    # latest/run.json so apps that weren't part of THIS run keep showing
+    # their last-good data on the dashboard. Without this, a TARGET_APP=
+    # shopify_temu run would wipe SHEIN/TEMU EU/SHEIN WooCommerce from
+    # results/latest/run.json. The history snapshot stays per-run (only
+    # the apps actually scraped) since it represents what THIS run did.
+    sellers_for_latest = dict(sellers_by_app)
+    uninstalls_for_latest = dict(uninstalls_by_app)
+    if is_targeted and promote_latest:
+        prior_path = LATEST_DIR / "run.json"
+        if prior_path.exists():
+            try:
+                prior = json.loads(prior_path.read_text(encoding="utf-8"))
+                prior_sellers = prior.get("data") or {}
+                prior_uninstalls = prior.get("uninstalls") or {}
+                for name, rows in prior_sellers.items():
+                    if name not in sellers_for_latest:
+                        sellers_for_latest[name] = rows
+                        logging.info(
+                            f"   ↳ merge: preserving {name} ({len(rows)} sellers) "
+                            f"from previous latest snapshot."
+                        )
+                for name, rows in prior_uninstalls.items():
+                    if name not in uninstalls_for_latest:
+                        uninstalls_for_latest[name] = rows
+            except Exception as err:
+                logging.warning(
+                    f"   ↳ merge: couldn't read previous latest/run.json "
+                    f"({err}); writing fresh (non-targeted apps will drop "
+                    f"out of the dashboard until next full scrape)."
+                )
+
+    # History snapshot reflects THIS run only (audit-trail truth).
+    run_json_history = {
         "run_stamp": stamp,
         "run_started_utc": datetime.now(timezone.utc).isoformat(),
         "counts": {name: len(rows) for name, rows in sellers_by_app.items()},
@@ -2578,13 +2616,37 @@ def persist_results(
         "data": sellers_by_app,
         "uninstalls": uninstalls_by_app,
     }
+    # Latest snapshot includes merged-forward data from non-targeted apps.
+    run_json_latest = dict(run_json_history)
+    if is_targeted and promote_latest:
+        run_json_latest["counts"] = {
+            n: len(r) for n, r in sellers_for_latest.items()
+        }
+        run_json_latest["total"] = sum(
+            len(r) for r in sellers_for_latest.values()
+        )
+        run_json_latest["uninstall_counts"] = {
+            n: len(r) for n, r in uninstalls_for_latest.items()
+        }
+        run_json_latest["uninstall_total"] = sum(
+            len(r) for r in uninstalls_for_latest.values()
+        )
+        run_json_latest["data"] = sellers_for_latest
+        run_json_latest["uninstalls"] = uninstalls_for_latest
+
     json_path = history_run_dir / "run.json"
-    json_path.write_text(json.dumps(run_json, indent=2, ensure_ascii=False), encoding="utf-8")
+    json_path.write_text(
+        json.dumps(run_json_history, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
     # Mirror to whichever bucket this run is targeting. Blocked runs land
     # in staging/<stamp>/run.json and leave latest/run.json untouched —
     # the dashboard keeps rendering the last-good snapshot.
     mirror_json = target_dir / "run.json"
-    mirror_json.write_text(json.dumps(run_json, indent=2, ensure_ascii=False), encoding="utf-8")
+    mirror_json.write_text(
+        json.dumps(run_json_latest, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
     written["json"] = str(json_path)
 
     return written
@@ -2817,6 +2879,7 @@ def main():
                 uninstalls_by_app=all_uninstalls,
                 stamp=stamp,
                 promote_latest=promote,
+                is_targeted=bool(target_app),
             )
             seller_total = sum(len(v) for v in all_sellers.values())
             uninstall_total = sum(len(v) for v in all_uninstalls.values())
