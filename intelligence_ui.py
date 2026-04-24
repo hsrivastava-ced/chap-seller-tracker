@@ -118,8 +118,24 @@ def _tier_counter_card(label: str, count: int, color: str, emoji: str) -> str:
     )
 
 
-def _download_csv(df: pd.DataFrame, filename: str) -> None:
+def _download_csv(
+    df: pd.DataFrame, filename: str, *, principal=None,
+) -> None:
+    """Render a CSV download button — but only for editor+ roles.
+
+    Viewers see the data on screen but can't pull it down. Rationale:
+    download = mass-email target list, and the same raw contact info
+    rows are what reps are looking at. Gate keeps the data inside the
+    app rather than scattered across desktops.
+    """
     if df.empty:
+        return
+    if principal is not None and not roles.can(principal, "export_csv"):
+        st.caption(
+            "📎 CSV export is disabled for viewer accounts. Ask a super "
+            "admin to grant you the **editor** role in Admin → Users "
+            "if you need to download."
+        )
         return
     st.download_button(
         "⬇ Download CSV",
@@ -364,6 +380,7 @@ def main() -> None:
             _download_csv(
                 df,
                 f"intel_{bucket.id}_{app_key}_{run_stamp}.csv",
+                principal=principal,
             )
 
     if inactive:

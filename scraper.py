@@ -366,6 +366,23 @@ def login_and_prepare(page, app_id, username=None, password=None):
         )
         logging.info(f"🎉 Inside Dashboard! URL: {page.url}")
 
+        # Some apps show TWO filter dropdowns at the top of the seller
+        # page — a framework (shopify/prestashop/woocommerce/etc.) AND
+        # a target app. The framework dropdown defaults to a single
+        # value (e.g. "shopify"), so the seller list only contains
+        # rows from that one framework. Flip it to "all" so cross-
+        # framework sellers (Prestashop + Shopify on the same app)
+        # aren't silently dropped.
+        try:
+            _ensure_framework_filter_is_all(page, app_id)
+        except Exception as err:
+            # Non-fatal — many apps don't have this dropdown (only one
+            # supported framework), and the scrape should still proceed
+            # with whatever rows the default filter shows.
+            logging.debug(
+                f"framework-to-all skipped for {app_id}: {err}"
+            )
+
     except Exception as e:
         shot = f"error_login_{app_id}.png"
         dom = f"debug_dom_login_{app_id}.txt"
@@ -378,6 +395,113 @@ def login_and_prepare(page, app_id, username=None, password=None):
             f"Screenshot: '{shot}' / DOM: '{dom}'. Error: {e}"
         )
         raise
+
+
+def _ensure_framework_filter_is_all(page, app_id: str) -> None:
+    """Flip the top-of-dashboard framework dropdown to 'all' so the
+    seller list isn't silently restricted to one integration type.
+
+    Some cHAP apps (e.g. TEMU EU, Mirakl variants) support multiple
+    source frameworks — Shopify, PrestaShop, WooCommerce, etc. The
+    admin-panel dashboard shows TWO dropdowns at the top of the seller
+    list: framework (shopify/prestashop/…/all) and target app
+    (temu/shein/…). The framework one defaults to a single value, so
+    if we leave it, we miss every seller on other frameworks.
+
+    Strategy: find the leftmost inte-Select header with a value that
+    is NOT already 'all'. Click to open. Pick the 'all' option. Wait
+    for the table to re-render. If no such dropdown exists (single-
+    framework app), no-op.
+
+    Kept tolerant — single PwTimeout doesn't raise. We log and
+    continue.
+    """
+    from playwright.sync_api import TimeoutError as PwTimeout
+
+    # Candidates: every inte-Select header inside the main content
+    # (NOT the sidebar nav). The framework dropdown sits above the
+    # sellers table.
+    headers = page.locator("main .inte-Select__Select--Header")
+    count = headers.count()
+    if count == 0:
+        return
+
+    target_header = None
+    for i in range(count):
+        h = headers.nth(i)
+        try:
+            text = (h.inner_text() or "").strip().lower()
+        except Exception:
+            continue
+        # If this header's visible value is already "all", nothing to do.
+        if text == "all":
+            target_header = None
+            break
+        # A single-word value that doesn't equal "all" is almost certainly
+        # the framework filter (shopify / prestashop / woocommerce / …).
+        # The target-app dropdown reads like "shein" / "temu" which are
+        # app identifiers, not framework names — those stay untouched.
+        FRAMEWORK_VALUES = {
+            "shopify", "prestashop", "woocommerce", "magento",
+            "bigcommerce", "wix", "squarespace",
+        }
+        if text in FRAMEWORK_VALUES:
+            target_header = h
+            break
+
+    if target_header is None:
+        return  # already 'all', or no framework filter present
+
+    logging.info(
+        f"🧭 Flipping framework filter to 'all' for {app_id} "
+        f"(was '{text}') so cross-framework sellers aren't dropped."
+    )
+    try:
+        target_header.scroll_into_view_if_needed()
+        target_header.click()
+    except Exception as err:
+        logging.debug(f"framework header click failed: {err}")
+        return
+
+    # The dropdown popup should surface an option with value/text 'all'.
+    try:
+        page.wait_for_selector(
+            "li.inte-Select__Select--Item",
+            timeout=6000,
+            state="visible",
+        )
+    except PwTimeout:
+        logging.debug("framework options panel didn't open")
+        return
+
+    # Prefer value="all"; fall back to the option whose visible text is 'all'.
+    all_option = page.locator("li.inte-Select__Select--Item[value='all']").first
+    if all_option.count() == 0:
+        # Hunt by visible text instead.
+        all_option = page.locator(
+            "li.inte-Select__Select--Item:has-text('all')"
+        ).first
+    if all_option.count() == 0:
+        logging.debug("no 'all' option in framework dropdown")
+        return
+
+    try:
+        all_option.click()
+    except Exception as err:
+        logging.debug(f"selecting 'all' failed: {err}")
+        return
+
+    # Give the seller table a beat to re-query. The row set may shrink
+    # OR grow depending on the framework mix — both are fine.
+    page.wait_for_timeout(800)
+    try:
+        page.wait_for_selector("tr.ant-table-row", timeout=10000)
+    except PwTimeout:
+        # Occasionally 'all' produces zero rows (app with only one
+        # framework that's now deselected). Not fatal; scraper's
+        # empty-table path handles it.
+        pass
+    logging.info(f"   ↳ framework filter now 'all' for {app_id}.")
 
 
 # ---------------------------------------------------------------------------

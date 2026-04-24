@@ -819,9 +819,19 @@ _DL_COUNTER: dict[str, int] = {}
 def _download_csv(df: pd.DataFrame, filename: str, *, label: str = "⬇ Download CSV") -> None:
     """Render a small 'Download CSV' button with the dataframe serialized.
     The key is made unique per (filename, invocation) so rerenders don't
-    clobber each other."""
+    clobber each other.
+
+    Role-gated: viewers don't get download buttons — the dashboard is
+    a view surface for them, not an export surface. We pull the active
+    principal from session_state (set by auth.gate) rather than
+    threading it through every panel. Editor+ roles see the button as
+    before.
+    """
     if df is None or df.empty:
         return
+    principal = st.session_state.get("_principal")
+    if principal is not None and not roles.can(principal, "export_csv"):
+        return  # silently omit for viewers — clutters panels otherwise
     _DL_COUNTER[filename] = _DL_COUNTER.get(filename, 0) + 1
     key = f"dl_{filename}_{_DL_COUNTER[filename]}"
     try:
