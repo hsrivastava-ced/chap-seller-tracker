@@ -158,8 +158,9 @@ def main():
     #   - Overview        — configured apps + Run scrape now
     #   - Add new app     — focused form (requires vault unlocked)
     #   - Settings        — credential vault + scrape schedule
+    #   - Runs            — live history from GitHub Actions
     #   - Users           — super-admin only, hidden otherwise
-    tab_labels = ["Overview", "Add new app", "Settings"]
+    tab_labels = ["Overview", "Add new app", "Settings", "Runs"]
     if roles.can(principal, "see_users_tab"):
         tab_labels.append("Users")
     tabs = st.tabs(tab_labels)
@@ -170,8 +171,10 @@ def main():
         _render_add_app_tab(principal)
     with tabs[2]:
         _render_settings_tab(principal)
-    if len(tabs) > 3:
-        with tabs[3]:
+    with tabs[3]:
+        _render_runs_tab(principal)
+    if len(tabs) > 4:
+        with tabs[4]:
             _render_users_tab(principal)
 
 
@@ -1039,6 +1042,129 @@ def _render_settings_tab(principal: roles.UserPrincipal) -> None:
 
     st.subheader("⏱ Scrape schedule")
     _render_schedule_section(principal)
+
+
+# =================================================================
+# Runs tab — live GitHub Actions history
+# =================================================================
+def _render_runs_tab(principal: roles.UserPrincipal) -> None:
+    """Live feed of the last 20 scrape runs across every workflow.
+
+    Pulls from GET /actions/runs using the same PAT the rest of the
+    admin UI uses. Shows when / what / pass-fail / how long / link so a
+    super admin can diagnose a red scheduled run without leaving the app.
+    """
+    st.subheader("Recent scrape runs")
+    st.caption(
+        "Live from GitHub Actions — covers the shared `scrape.yml` AND "
+        "any per-app workflow files (`scrape_<id>.yml`). Click **open →** "
+        "on any row to jump to the full log."
+    )
+
+    # Refresh button in the top-right so super admins can poll without
+    # reloading the whole page (which would bounce through OAuth etc.).
+    _, refresh_col = st.columns([4, 1])
+    with refresh_col:
+        if st.button("🔄 Refresh", key="runs_refresh", use_container_width=True):
+            st.rerun()
+
+    try:
+        ctx = gh.context_from_streamlit(st)
+    except Exception as e:
+        show_warning(
+            "We couldn't reach GitHub to load run history.",
+            hint="Check that the `[github]` block in Streamlit secrets has "
+                 "`owner`, `repo`, and `pat`. Ask the admin to fix and reboot.",
+            cause=e,
+        )
+        return
+
+    with st.spinner("Loading last 20 runs from GitHub…"):
+        try:
+            runs = gh.list_workflow_runs(ctx, limit=20)
+        except Exception as e:
+            show_warning(
+                "Couldn't load run history.",
+                hint="The PAT needs `Actions: Read` permission (usually "
+                     "included with read access). If the error persists, "
+                     "contact the admin.",
+                cause=e,
+            )
+            return
+
+    if not runs:
+        st.info("No workflow runs yet. Dispatch one from **Overview → Run scrape now**.")
+        return
+
+    # --- build the display table ---------------------------------------
+    status_emoji = {
+        "success":   "✅ success",
+        "failure":   "❌ failure",
+        "cancelled": "⏹ cancelled",
+        "skipped":   "⏭ skipped",
+        "timed_out": "⏰ timed out",
+    }
+    event_label = {
+        "schedule":          "⏱ scheduled",
+        "workflow_dispatch": "🖱 manual",
+        "push":              "📤 push",
+    }
+
+    rows = []
+    for r in runs:
+        conclusion = r.get("conclusion")
+        if conclusion is None and r.get("status") in ("in_progress", "queued"):
+            status = f"⏳ {r.get('status', 'running')}"
+        else:
+            status = status_emoji.get(conclusion, f"❓ {conclusion or '?'}")
+
+        start = r.get("run_started_at") or r.get("created_at")
+        end = r.get("updated_at")
+        dur = "—"
+        if start and end:
+            try:
+                s = datetime.fromisoformat(start.replace("Z", "+00:00"))
+                e = datetime.fromisoformat(end.replace("Z", "+00:00"))
+                total = int((e - s).total_seconds())
+                if total >= 60:
+                    dur = f"{total // 60}m {total % 60}s"
+                else:
+                    dur = f"{total}s"
+            except Exception:
+                pass
+
+        when = (start or "")[:16].replace("T", " ") if start else "—"
+
+        rows.append({
+            "When (UTC)": when,
+            "Workflow": r.get("name") or "—",
+            "Status": status,
+            "Duration": dur,
+            "Trigger": event_label.get(r.get("event"), r.get("event") or "?"),
+            "View": r.get("html_url") or "",
+        })
+
+    st.dataframe(
+        rows,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "View": st.column_config.LinkColumn(
+                "View", display_text="open →"
+            ),
+        },
+    )
+
+    # Quick summary band below the table.
+    successes = sum(1 for r in runs if r.get("conclusion") == "success")
+    failures = sum(1 for r in runs if r.get("conclusion") == "failure")
+    running = sum(
+        1 for r in runs if r.get("status") in ("in_progress", "queued")
+    )
+    st.caption(
+        f"Showing last {len(runs)}: ✅ {successes} success · "
+        f"❌ {failures} fail · ⏳ {running} running."
+    )
 
 
 # =================================================================

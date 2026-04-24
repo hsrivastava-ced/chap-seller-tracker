@@ -301,6 +301,34 @@ def read_file(ctx: RepoContext, repo_path: str) -> str:
 # ---------------------------------------------------------------------
 # Trigger workflow
 # ---------------------------------------------------------------------
+def list_workflow_runs(
+    ctx: RepoContext,
+    limit: int = 20,
+) -> list[dict]:
+    """Fetch the most-recent workflow runs for the repo.
+
+    Used by the admin Runs tab to surface scrape history inline without
+    bouncing users to github.com/...actions. Returns the raw GitHub API
+    response entries (id, name, conclusion, status, created_at,
+    run_started_at, updated_at, html_url, event, display_title).
+
+    We don't filter server-side by workflow name here — the admin UI
+    shows runs across the shared scrape.yml AND any per-app workflow
+    files (scrape_<id>.yml) in one table so super admins see the whole
+    picture.
+    """
+    import requests
+    r = requests.get(
+        f"{ctx.base}/actions/runs",
+        params={"per_page": max(1, min(int(limit), 100))},
+        headers=ctx.headers,
+        timeout=15,
+    )
+    r.raise_for_status()
+    runs = r.json().get("workflow_runs", []) or []
+    return runs[:limit]
+
+
 def trigger_scrape(
     ctx: RepoContext,
     reason: str = "onboarding",
