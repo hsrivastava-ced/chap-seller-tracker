@@ -296,16 +296,6 @@ def main() -> None:
                 f"intel_{bucket.id}_{app_key}_{run_stamp}.csv",
             )
 
-            # ---- AI business analysis (per lead) ------------------
-            # Drilldown: pick a shop from this bucket → Claude analyses
-            # the storefront → we cache it + show business type,
-            # categories, positioning, pitch opening.
-            _render_analyse_block(
-                bucket_rows=bucket.rows,
-                bucket_id=bucket.id,
-                app_key=app_key,
-            )
-
     if inactive:
         with st.expander(
             f"Empty buckets ({len(inactive)}) — no one fits here right now",
@@ -317,11 +307,7 @@ def main() -> None:
                 st.write("")
 
     st.divider()
-    _render_bulk_enrich_section(
-        principal=principal,
-        sellers_by_app_all=sellers_by_app,
-    )
-    st.divider()
+    _render_advanced_preview(principal=principal, app_key=app_key)
     st.caption(
         "Coming next: day-over-day delta (what changed since the last "
         "scrape — new installs, plan changes, failed-order spikes), "
@@ -462,7 +448,14 @@ def _render_bulk_enrich_section(
 
 
 # ---------------------------------------------------------------------
-# AI business analysis — per-lead drilldown under each bucket.
+# AI business analysis — per-lead drilldown.
+#
+# NOT RENDERED in the current UI — the live Anthropic-API flow is
+# parked until we have API access. The functions stay in the repo so
+# we can wire them back up (via _render_analyse_block) the day the
+# key lands in Streamlit secrets. The Advanced Intelligence preview
+# section below uses static sample data to show stakeholders what
+# the final surface will look like.
 # ---------------------------------------------------------------------
 
 
@@ -589,6 +582,332 @@ def _render_profile(profile) -> None:
         f'line-height:1.5;"><b>Insight:</b> {insight_text}</div>'
         f'<div style="margin-top:8px; color:#a5b4fc; font-size:0.92rem; '
         f'line-height:1.5;"><b>Opportunity:</b> {opportunity_text}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# =====================================================================
+# Advanced Intelligence — stakeholder preview (static sample data).
+#
+# Purpose: show decision-makers the *vision* for AI-assisted seller
+# intelligence before we've paid to wire up a live model. Every number
+# and every profile below is hand-crafted sample data — there is NO
+# call to Anthropic here, no DB lookup, no scraped content. The
+# section is gated to super_admin so regular viewers don't confuse
+# this preview with real live data.
+#
+# When / how to flip to live:
+#   1. Provision an ANTHROPIC_API_KEY (or alternative model provider).
+#   2. Re-enable _render_analyse_block under each bucket tab.
+#   3. Re-enable _render_bulk_enrich_section from main().
+#   4. Swap _render_advanced_preview for a live version that reads
+#      public.seller_profiles directly.
+# =====================================================================
+
+
+_DEMO_SUMMARY = {
+    "shopify_temu": {
+        "analysed": 84, "brands": 26, "resellers": 41,
+        "manufacturers": 9, "boutiques": 8,
+        "top_categories": [
+            ("Home & Kitchen", 23), ("Apparel", 19),
+            ("Toys & Games", 14), ("Electronics", 11), ("Beauty", 9),
+        ],
+        "high_priority_leads": 12,
+    },
+    "shein": {
+        "analysed": 61, "brands": 34, "resellers": 18,
+        "manufacturers": 3, "boutiques": 6,
+        "top_categories": [
+            ("Apparel", 38), ("Accessories", 14),
+            ("Footwear", 11), ("Beauty", 7), ("Home", 3),
+        ],
+        "high_priority_leads": 9,
+    },
+    "shopify_temu_eu": {
+        "analysed": 42, "brands": 14, "resellers": 21,
+        "manufacturers": 4, "boutiques": 3,
+        "top_categories": [
+            ("Home & Kitchen", 13), ("Apparel", 11),
+            ("Pet Supplies", 6), ("Electronics", 5), ("Garden", 4),
+        ],
+        "high_priority_leads": 6,
+    },
+    "shein_woocommerce": {
+        "analysed": 20, "brands": 12, "resellers": 5,
+        "manufacturers": 1, "boutiques": 2,
+        "top_categories": [
+            ("Apparel", 11), ("Beauty", 4),
+            ("Accessories", 3), ("Home", 2),
+        ],
+        "high_priority_leads": 3,
+    },
+    "shopify_gearexchange": {
+        "analysed": 7, "brands": 3, "resellers": 2,
+        "manufacturers": 1, "boutiques": 1,
+        "top_categories": [
+            ("Musical Instruments", 5), ("Audio Gear", 2),
+        ],
+        "high_priority_leads": 2,
+    },
+}
+
+
+_DEMO_PROFILES = {
+    "shopify_temu": [
+        {
+            "store": "mojosmusic.com",
+            "email": "tom@mojosmusic.com",
+            "business_type": "Brand",
+            "categories": ["Musical Instruments", "Audio Gear"],
+            "insight": (
+                "Family-run music retailer with ~470 SKUs — focused on "
+                "guitars and audio equipment. Brand-owned Shopify; not "
+                "dropshipping."
+            ),
+            "opportunity": (
+                "Add TikTok Shop integration — instrument demos perform "
+                "well there; their catalog is ready to cross-post."
+            ),
+            "confidence": 92,
+        },
+        {
+            "store": "knickknacktoyshack.myshopify.com",
+            "email": "steven@knickknacktoyshack.com",
+            "business_type": "Reseller",
+            "categories": ["Toys & Games", "Collectibles"],
+            "insight": (
+                "Shopify reseller sitting on ~900 SKUs with low monthly "
+                "order volume — typical catalog-heavy early-stage shop."
+            ),
+            "opportunity": (
+                "Offer Amazon Channel listing — their product diversity "
+                "would benefit from marketplace reach before paying for "
+                "ads on their own store."
+            ),
+            "confidence": 84,
+        },
+    ],
+    "shein": [
+        {
+            "store": "trendation-shop.de",
+            "email": "info@trendation-shop.de",
+            "business_type": "Brand",
+            "categories": ["Apparel", "Footwear"],
+            "insight": (
+                "German fashion brand with ~30k SKUs — heavy catalog, "
+                "German-language storefront, serious logistics operation."
+            ),
+            "opportunity": (
+                "Priority for SHEIN EU expansion — large catalog, "
+                "EU-native brand, Basic plan caps their listing "
+                "throughput. Upsell to Growth tier."
+            ),
+            "confidence": 95,
+        },
+        {
+            "store": "sheindemo.myshopify.com",
+            "email": "schauhan@threecolts.com",
+            "business_type": "Unknown",
+            "categories": [],
+            "insight": (
+                "Internal demo store — thin product catalog (15 SKUs), "
+                "no orders flowing. Exclude from rep outreach."
+            ),
+            "opportunity": "—",
+            "confidence": 98,
+        },
+    ],
+    "shopify_gearexchange": [
+        {
+            "store": "diabloguitars.com",
+            "email": "orders@diabloguitars.com",
+            "business_type": "Brand",
+            "categories": ["Musical Instruments", "Guitars"],
+            "insight": (
+                "Custom guitar builder with strong brand identity, "
+                "~1,200 SKUs and 11 monthly orders on Silver plan — "
+                "product-market fit visible, under-monetized."
+            ),
+            "opportunity": (
+                "Upsell to Gold: their reorder rate + handcrafted "
+                "margin justifies premium placement + feature exposure."
+            ),
+            "confidence": 89,
+        },
+        {
+            "store": "egaguitars.com",
+            "email": "jt.trevino@egaguitars.com",
+            "business_type": "Brand",
+            "categories": ["Musical Instruments", "Guitars"],
+            "insight": (
+                "Guitar brand with 350 orders on Bronze plan — highest "
+                "throughput in the GearExchange cohort. 4 failed orders "
+                "suggests fulfilment friction worth flagging."
+            ),
+            "opportunity": (
+                "Dual play: upsell to Silver for higher throughput "
+                "limits AND loop Support in on the failed-order thread."
+            ),
+            "confidence": 94,
+        },
+    ],
+}
+
+
+def _demo_counts(app_key: str) -> dict:
+    return _DEMO_SUMMARY.get(app_key, {})
+
+
+def _render_advanced_preview(*, principal, app_key: str) -> None:
+    """Stakeholder-facing preview of the advanced-intelligence vision.
+
+    Super-admin only. Renders a summary dashboard + two example seller
+    profile cards using hand-crafted sample data. Every element is
+    labelled `PREVIEW / SAMPLE DATA` so there's no confusion about
+    what's real and what's shown for selling-the-idea purposes.
+    """
+    if not roles.can(principal, "approve_schema_drift"):
+        return
+
+    with st.expander(
+        "🔮 Advanced Intelligence (Preview · Super-admin only)",
+        expanded=False,
+    ):
+        st.markdown(
+            '<div style="padding:10px 14px; background:#fef3c7; '
+            'border-left:4px solid #f59e0b; border-radius:6px; '
+            'margin-bottom:18px; color:#78350f; font-size:0.9rem;">'
+            '<b>Preview · Sample data only.</b>  This panel shows the '
+            'vision for AI-assisted seller intelligence. None of the '
+            'numbers or profiles below are live — they are hand-crafted '
+            'examples so stakeholders can see what the finished surface '
+            'will look like before we commit to a model provider.'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
+        summary = _demo_counts(app_key)
+        if summary:
+            _render_preview_summary(app_key, summary)
+        else:
+            st.info(
+                f"No preview data configured for {display_name(app_key)} "
+                "— add it to `_DEMO_SUMMARY` in intelligence_ui.py to "
+                "show a sample dashboard for this app."
+            )
+
+        profiles = _DEMO_PROFILES.get(app_key, [])
+        if profiles:
+            st.markdown("#### 🧾 Example seller profiles")
+            st.caption(
+                "This is what each lead's detail card will look like "
+                "once live AI analysis is enabled. Business type, "
+                "categories, positioning note + suggested pitch are "
+                "generated from the seller's public storefront."
+            )
+            for p in profiles:
+                _render_demo_profile_card(p)
+
+
+def _render_preview_summary(app_key: str, s: dict) -> None:
+    """Top summary strip — what stakeholders see first."""
+    st.markdown(f"#### 📊 Coverage · {display_name(app_key)}")
+    c1, c2, c3, c4, c5 = st.columns(5)
+
+    def _mini(col, label, value, color):
+        col.markdown(
+            f'<div style="padding:12px 14px; background:#0f172a; '
+            f'border-radius:10px; border:1px solid #334155;">'
+            f'<div style="color:#94a3b8; font-size:0.68rem; '
+            f'font-weight:600; letter-spacing:0.06em; '
+            f'text-transform:uppercase;">{label}</div>'
+            f'<div style="color:{color}; font-size:1.5rem; '
+            f'font-weight:700; margin-top:4px;">{value}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    _mini(c1, "Analysed", f"{s['analysed']:,}", "#a5b4fc")
+    _mini(c2, "Brands", f"{s['brands']:,}", "#10b981")
+    _mini(c3, "Resellers", f"{s['resellers']:,}", "#3b82f6")
+    _mini(c4, "Manufacturers", f"{s['manufacturers']:,}", "#f59e0b")
+    _mini(c5, "Boutiques", f"{s['boutiques']:,}", "#ec4899")
+
+    st.write("")
+
+    cats = s.get("top_categories") or []
+    if cats:
+        st.markdown("**🏷 Top product categories** (seller count per category)")
+        chips = "".join(
+            f'<span style="display:inline-block; margin:0 8px 6px 0; '
+            f'padding:6px 12px; border-radius:16px; background:#334155; '
+            f'color:#e2e8f0; font-size:0.84rem;">'
+            f'{name} <span style="color:#94a3b8;">· {count}</span>'
+            f'</span>'
+            for name, count in cats
+        )
+        st.markdown(f'<div>{chips}</div>', unsafe_allow_html=True)
+
+    hp = s.get("high_priority_leads", 0)
+    if hp:
+        st.markdown(
+            f'<div style="margin-top:16px; padding:12px 16px; '
+            f'background:rgba(239,68,68,0.08); border-left:4px solid '
+            f'#ef4444; border-radius:6px; color:#e2e8f0;">'
+            f'🔥 <b>{hp}</b> high-priority leads flagged by AI — '
+            f'brands/manufacturers on free or low-tier plans with '
+            f'meaningful catalog + order signal. (Preview figure.)'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+
+def _render_demo_profile_card(p: dict) -> None:
+    """Single seller profile card — dark card with AI-generated
+    business_type, categories, insight, opportunity + confidence %."""
+    cat_html = "".join(
+        f'<span style="display:inline-block; padding:2px 10px; '
+        f'margin:0 6px 4px 0; border-radius:12px; background:#334155; '
+        f'color:#e2e8f0; font-size:0.78rem;">{c}</span>'
+        for c in p.get("categories") or []
+    )
+    if not cat_html:
+        cat_html = (
+            '<span style="color:#64748b; font-size:0.85rem;">'
+            '(no categories inferred)</span>'
+        )
+    confidence = p.get("confidence", 0)
+    conf_color = (
+        "#10b981" if confidence >= 85
+        else "#f59e0b" if confidence >= 70
+        else "#94a3b8"
+    )
+    st.markdown(
+        f'<div style="padding:16px 20px; margin:10px 0; background:#0f172a; '
+        f'border-radius:10px; border:1px solid #334155;">'
+        f'<div style="display:flex; justify-content:space-between; '
+        f'align-items:flex-start; gap:16px;">'
+        f'<div>'
+        f'<div style="color:#94a3b8; font-size:0.72rem; '
+        f'text-transform:uppercase; letter-spacing:0.06em; '
+        f'font-weight:600;">{p["store"]}  ·  {p["email"]}</div>'
+        f'<div style="color:#f1f5f9; font-size:1.15rem; '
+        f'font-weight:700; margin:3px 0 8px;">{p["business_type"]}</div>'
+        f'<div>{cat_html}</div>'
+        f'</div>'
+        f'<div style="text-align:right;">'
+        f'<div style="color:#64748b; font-size:0.68rem; '
+        f'text-transform:uppercase;">Confidence</div>'
+        f'<div style="color:{conf_color}; font-size:1.3rem; '
+        f'font-weight:700;">{confidence}%</div>'
+        f'</div>'
+        f'</div>'
+        f'<div style="margin-top:12px; color:#cbd5e1; font-size:0.92rem; '
+        f'line-height:1.5;"><b>Insight:</b> {p["insight"]}</div>'
+        f'<div style="margin-top:8px; color:#a5b4fc; font-size:0.92rem; '
+        f'line-height:1.5;"><b>Opportunity:</b> {p["opportunity"]}</div>'
         f'</div>',
         unsafe_allow_html=True,
     )
