@@ -36,4 +36,14 @@ apps:
   added_by: hsrivastava@threecolts.com
   added_at: '2026-04-24T16:21:21+00:00'
   schema_status: canonical
-  notes: 'Promoted to canonical 2026-04-24 after clean scrape (20 sellers, 0 uninstalls).'
+  notes: Promoted to canonical 2026-04-24 after clean scrape (20 sellers, 0 uninstalls).
+- id: shopify_gearexchange
+  label: Shopify GearExchange
+  dropdown_value: shopify_gearexchange
+  scrape_installs: true
+  scrape_uninstalls: true
+  creds_ref: APP_5
+  added_by: hsrivastava@threecolts.com
+  added_at: '2026-04-24T17:58:39+00:00'
+  schema_status: pending_review
+  notes: ''
