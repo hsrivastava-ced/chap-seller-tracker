@@ -33,7 +33,9 @@ admin UI never has to spawn a browser.
 """
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Optional
 
 import streamlit as st
@@ -43,6 +45,65 @@ import auth
 import github_secret_updater as gh
 import roles
 from app_registry import AppEntry
+
+
+# =================================================================
+# Constants — tied to cHAP, not generic
+# =================================================================
+# The admin UI only works against the CedCommerce cHAP admin panel.
+# Everything below (supported app list, field shapes) assumes that.
+CHAP_LOGIN_URL = "https://app-v2-frontend.cifapps.com/auth/login"
+
+# List of values emitted by the cHAP login page's app-picker dropdown.
+# These are stable identifiers — the cHAP team adds entries when new
+# marketplaces come online. Update this list as new ones launch.
+# Labels are the "nice" display names (with occasional disambiguation
+# for regional / framework variants).
+SUPPORTED_APPS: list[dict] = [
+    {"value": "aliexpress",                 "label": "AliExpress"},
+    {"value": "bigcommerce",                "label": "BigCommerce"},
+    {"value": "global_mcf",                 "label": "Global MCF"},
+    {"value": "google_shopify_express",     "label": "Google Shopify Express"},
+    {"value": "joom",                       "label": "Joom"},
+    {"value": "michael",                    "label": "Michael"},
+    {"value": "mirakl_woocommerce",         "label": "Mirakl WooCommerce"},
+    {"value": "mirakl_woocommerce_staging", "label": "Mirakl WooCommerce (Staging)"},
+    {"value": "miravia",                    "label": "Miravia"},
+    {"value": "shein",                      "label": "SHEIN"},
+    {"value": "shein_woocommerce",          "label": "SHEIN WooCommerce"},
+    {"value": "shopify_gearexchange",       "label": "Shopify GearExchange"},
+    {"value": "shopify_temu",               "label": "TEMU US (Shopify)"},
+    {"value": "shopify_temu_eu",            "label": "TEMU EU (Shopify)"},
+    {"value": "shopline-catch",             "label": "Shopline Catch"},
+    {"value": "shopline_amazon",            "label": "Shopline Amazon"},
+    {"value": "shopline_ebay",              "label": "Shopline eBay"},
+    {"value": "tiktok",                     "label": "TikTok"},
+    {"value": "trendyol",                   "label": "Trendyol"},
+    {"value": "zoho",                       "label": "Zoho"},
+]
+
+# Frequency choices for the global scrape schedule. GitHub Actions cron
+# is UTC. 12h option keeps the existing 00:00 / 12:00 IST alignment for
+# familiarity; 6h / 24h use simple UTC intervals. Minimum 6h is a
+# product constraint (cHAP rate-limits, plus our own scrape run takes
+# ~5 min per app).
+FREQ_CHOICES: dict[str, dict] = {
+    "Every 6 hours (4× per day)": {
+        "hours": 6,
+        "crons": [("0 */6 * * *", "every 6 hours (UTC)")],
+    },
+    "Every 12 hours (00:00 + 12:00 IST)": {
+        "hours": 12,
+        "crons": [
+            ("30 18 * * *", "00:00 IST = 18:30 UTC previous day"),
+            ("30 6 * * *",  "12:00 IST = 06:30 UTC same day"),
+        ],
+    },
+    "Once per day (00:00 IST)": {
+        "hours": 24,
+        "crons": [("30 18 * * *", "00:00 IST = 18:30 UTC previous day")],
+    },
+}
 
 
 # =================================================================
@@ -80,24 +141,25 @@ def main():
 # =================================================================
 def _render_apps_tab(principal: roles.UserPrincipal):
     # -----------------------------------------------------------
-    # "Run scrape now" — top-of-tab convenience for the Option A
-    # scheduling model (fixed twice-daily cron + on-demand button).
-    # Any editor+ can trigger a fresh workflow_dispatch without
-    # waiting for the next 00:00 / 12:00 IST tick. Takes ~3–5 min.
+    # Top row: header + on-demand Run now button.
     # -----------------------------------------------------------
     top_col1, top_col2 = st.columns([3, 2])
     with top_col1:
         st.subheader("Configured admin panels")
         st.caption(
-            "Scheduled scrape runs **twice a day** — 00:00 and 12:00 IST "
-            "(cron is defined in `.github/workflows/scrape.yml`). "
-            "Click **Run scrape now** for on-demand refresh."
+            "All configured apps are scraped on the shared schedule below. "
+            "Click **Run scrape now** to trigger an on-demand run."
         )
     with top_col2:
         if roles.can(principal, "add_app"):
-            st.markdown("&nbsp;")  # vertical alignment with the caption above
+            st.markdown("&nbsp;")
             if st.button("▶ Run scrape now", type="primary", use_container_width=True):
                 _trigger_scrape_now(principal)
+
+    # Global scrape schedule selector — one knob controls the cron for
+    # ALL configured apps. Minimum 6 h to respect cHAP rate-limits and
+    # the fact that one full scrape takes ~5 min per app.
+    _render_schedule_section(principal)
 
     apps = app_registry.all_apps()
     if not apps:
@@ -144,76 +206,108 @@ def _render_add_app_wizard(principal: roles.UserPrincipal):
     first real scrape — the guardrail + schema_guard flag the app
     "pending_review" or "canonical" in the table above.
     """
-    # Show last-success banner, if any, so a rerun after submit doesn't
-    # look like nothing happened.
+    # Show last-success banner so a rerun after submit feels intentional.
     last = st.session_state.pop("_add_app_success", None)
     if last:
         st.success(last)
 
-    existing_ids = {a.id for a in app_registry.all_apps()}
-    cache_present = bool(st.session_state.get("_creds_cache"))
+    # Fixed URL banner — this UI is cHAP-only, so we don't ask the user
+    # to type a login URL.
+    st.info(
+        f"**Works on the cHAP admin panel only.** We log into "
+        f"`{CHAP_LOGIN_URL}` with the credentials you provide below, "
+        f"then scrape the install / uninstall lists for the selected app."
+    )
 
+    existing_values = {a.dropdown_value for a in app_registry.all_apps()}
+    available = [a for a in SUPPORTED_APPS if a["value"] not in existing_values]
+    if not available:
+        st.success("🎉 Every supported cHAP app is already onboarded.")
+        return
+
+    cache_present = bool(st.session_state.get("_creds_cache"))
     if not cache_present:
-        st.info(
-            "**First time adding an app in this session.** GitHub doesn't let us "
-            "read the current `CREDS` secret back, so the first add needs you to "
-            "paste the current body (see the **Current CREDS bundle** section at "
-            "the bottom). Subsequent adds will reuse a cached copy automatically."
+        st.warning(
+            "**First time adding an app in this session.** GitHub doesn't let "
+            "us read the current `CREDS` secret back, so you'll need to paste "
+            "the existing `CREDS` bundle once (see the section near the bottom "
+            "of the form). The app remembers it for later adds in the same session."
         )
 
     with st.form("add_app_form", clear_on_submit=False):
-        c1, c2 = st.columns(2)
-        with c1:
-            name = st.text_input(
-                "Friendly name",
-                placeholder="Walmart CA",
-                help="Shown in dashboards and the apps table.",
-            )
-        with c2:
-            app_id = st.text_input(
-                "Internal id",
-                placeholder="walmart_ca",
-                help="Lowercase snake_case. Used as CSV filename prefix and DB key.",
-            )
-
-        dropdown = st.text_input(
-            "Dropdown value",
-            placeholder="walmart_ca",
+        # --- App selection -----------------------------------------------
+        labels = [f"{a['label']} — {a['value']}" for a in available]
+        picked_idx = st.selectbox(
+            "App to onboard",
+            options=range(len(available)),
+            format_func=lambda i: labels[i],
             help=(
-                "The exact `value` attribute from the app-picker `<select>` on the "
-                "CedCommerce login page. Right-click the dropdown → Inspect to grab "
-                "it. Often identical to the internal id."
+                "List mirrors the app-picker dropdown on the cHAP login page. "
+                "Already-configured apps are filtered out."
+            ),
+        )
+        picked = available[picked_idx]
+
+        display_name = st.text_input(
+            "Display name (optional)",
+            value=picked["label"],
+            help=(
+                "How this app shows up in dashboards and the apps table. "
+                "Defaults to the cHAP friendly name; edit if you want a "
+                "shorter or clearer one."
             ),
         )
 
-        st.markdown("**Credentials for this admin panel**")
-        c3, c4 = st.columns(2)
-        with c3:
-            email = st.text_input("Email", placeholder="ops@cedcommerce.com")
-        with c4:
-            password = st.text_input("Password", type="password")
+        # --- Credentials -------------------------------------------------
+        st.markdown("**Credentials for this app's cHAP login**")
+        c_email, c_pw = st.columns(2)
+        with c_email:
+            email = st.text_input(
+                "Email",
+                placeholder="ops@cedcommerce.com",
+                help="The email you use to sign in to cHAP for this app.",
+            )
+        with c_pw:
+            password = st.text_input(
+                "Password", type="password",
+                help="Stored encrypted in the GitHub Actions `CREDS` secret.",
+            )
 
+        # --- Scrape toggles ---------------------------------------------
         st.markdown("**What to scrape**")
-        c5, c6 = st.columns(2)
-        with c5:
-            wants_installs = st.checkbox("Seller installs", value=True)
-        with c6:
-            wants_uninstalls = st.checkbox("Uninstalls", value=True)
+        c_ins, c_uni = st.columns(2)
+        with c_ins:
+            wants_installs = st.checkbox(
+                "Seller installs", value=True,
+                help="Active sellers currently installed on this app.",
+            )
+        with c_uni:
+            wants_uninstalls = st.checkbox(
+                "Uninstalls", value=True,
+                help="Sellers who uninstalled this app (churn tracking).",
+            )
 
         run_after = st.checkbox(
-            "Run a scrape right after adding",
+            "Dispatch a test scrape right after adding",
             value=True,
-            help="Dispatches the GitHub Actions workflow. Results land in ~3-5 min.",
+            help=(
+                "Kicks off the GitHub Actions workflow for this new app. "
+                "First run takes ~3-5 min; results show up in the Apps table "
+                "above and on the Dashboard."
+            ),
         )
 
-        with st.expander(
-            "Current CREDS bundle" + ("  (cached — expand only to override)" if cache_present else "  ← REQUIRED for first add"),
-            expanded=not cache_present,
-        ):
+        # --- CREDS bundle paste-back ------------------------------------
+        expander_label = (
+            "Current CREDS bundle  (cached — expand only to override)"
+            if cache_present
+            else "Current CREDS bundle  ← REQUIRED for first add"
+        )
+        with st.expander(expander_label, expanded=not cache_present):
             st.caption(
-                "GitHub secrets can be written but not read back. Paste the current "
-                "`CREDS` repo-secret body so we can append the new `APP_N_USER` / "
-                "`APP_N_PASS` lines without losing the existing apps."
+                "We can't read the existing `CREDS` secret back from GitHub, "
+                "so paste its current body here. It's the `KEY=value` block "
+                "currently stored under repo Settings → Secrets → `CREDS`."
             )
             creds_body = st.text_area(
                 "CREDS body",
@@ -232,36 +326,29 @@ def _render_add_app_wizard(principal: roles.UserPrincipal):
 
     # --- Validation -----------------------------------------------------
     errs: list[str] = []
-    if not name.strip():
-        errs.append("Friendly name is required.")
-    if not app_id.strip():
-        errs.append("Internal id is required.")
-    elif not all(c.islower() or c.isdigit() or c == "_" for c in app_id.strip()):
-        errs.append("Internal id must be lowercase snake_case (letters, digits, underscores).")
-    elif app_id.strip() in existing_ids:
-        errs.append(f"Internal id `{app_id.strip()}` already exists.")
-    if not dropdown.strip():
-        errs.append("Dropdown value is required.")
+    if not display_name.strip():
+        errs.append("Display name can't be empty.")
     if not email.strip() or not password:
-        errs.append("Both email and password are required.")
+        errs.append("Email and password are both required.")
     if not (wants_installs or wants_uninstalls):
         errs.append("Pick at least one of installs / uninstalls.")
     if not creds_body.strip():
         errs.append(
-            "Paste the current CREDS bundle (see the section above). "
-            "We need it to append new credentials without dropping existing ones."
+            "Paste the current CREDS bundle in the section above. We need "
+            "it to append the new credentials without dropping existing ones."
         )
     if errs:
         for e in errs:
             st.error(e)
         return
 
-    # --- Commit flow ----------------------------------------------------
+    # Dropdown value doubles as the internal id — they're identical by
+    # design for cHAP (the login page's value IS the stable key we use).
     _commit_new_app(
         principal=principal,
-        name=name.strip(),
-        app_id=app_id.strip(),
-        dropdown=dropdown.strip(),
+        name=display_name.strip(),
+        app_id=picked["value"],
+        dropdown=picked["value"],
         email=email.strip(),
         password=password,
         wants_installs=wants_installs,
@@ -487,6 +574,125 @@ def _trigger_scrape_now(principal: roles.UserPrincipal) -> None:
         "Workflow dispatched. Fresh data should land in the dashboard in "
         "~3–5 minutes. Watch the GitHub Actions `scrape-chap` run for progress."
     )
+
+
+# =================================================================
+# Scrape schedule (global cron)
+# =================================================================
+# Design: one knob drives `.github/workflows/scrape.yml`'s schedule
+# block. We rewrite the `schedule:` section via the Contents API instead
+# of surgery on arbitrary YAML (comments, anchors, etc. elsewhere in the
+# file are preserved). Min 6 h, enforced by FREQ_CHOICES only offering
+# 6/12/24 h options.
+_SCRAPE_WORKFLOW_PATH = ".github/workflows/scrape.yml"
+_SCHEDULE_BLOCK_RE = re.compile(
+    r"(^\s*schedule:\s*\n)"
+    r"((?:^\s*-\s*cron:.*\n)+)",
+    re.MULTILINE,
+)
+
+
+def _render_schedule_section(principal: roles.UserPrincipal) -> None:
+    """Expander that shows the current cron + lets editors change it."""
+    current_label = _detect_current_schedule_label()
+    with st.expander(
+        f"⏱ Scrape schedule  —  current: **{current_label or 'unknown'}**",
+        expanded=False,
+    ):
+        st.caption(
+            "The GitHub Actions workflow scrapes every configured app on "
+            "this cadence. Minimum 6 hours — cHAP rate-limits, and a full "
+            "run already takes ~5 min per app."
+        )
+
+        if not roles.can(principal, "add_app"):
+            st.info("View only. Ask a super admin to change the schedule.")
+            return
+
+        # Default the dropdown to whatever scrape.yml currently has.
+        keys = list(FREQ_CHOICES.keys())
+        default_idx = keys.index(current_label) if current_label in keys else 1
+        choice = st.selectbox(
+            "Pick a new schedule",
+            options=keys,
+            index=default_idx,
+        )
+
+        if st.button("Save schedule", key="save_sched"):
+            if choice == current_label:
+                st.info("Schedule is already set to that. Nothing to commit.")
+                return
+            try:
+                _apply_schedule_change(principal, choice)
+                st.success(
+                    f"✅ Schedule updated to **{choice}**. GitHub will pick it "
+                    f"up on the next cron tick; Streamlit Cloud redeploys this "
+                    f"UI within ~30 s so the 'current' label refreshes."
+                )
+            except Exception as e:
+                st.error(f"Couldn't update schedule: {e}")
+
+
+def _detect_current_schedule_label() -> Optional[str]:
+    """Return the FREQ_CHOICES label matching scrape.yml's current crons.
+
+    Reads the local checkout (Streamlit Cloud auto-syncs on push). If the
+    existing cron set doesn't match any predefined option (e.g. someone
+    hand-edited the workflow), returns None — the UI flags that as
+    "unknown" and offers the choices anyway.
+    """
+    try:
+        text = Path(_SCRAPE_WORKFLOW_PATH).read_text(encoding="utf-8")
+    except Exception:
+        return None
+    crons = set(re.findall(r'-\s*cron:\s*"([^"]+)"', text))
+    for label, info in FREQ_CHOICES.items():
+        if {c for c, _ in info["crons"]} == crons:
+            return label
+    return None
+
+
+def _apply_schedule_change(principal: roles.UserPrincipal, choice: str) -> None:
+    """Read scrape.yml from GitHub, rewrite the schedule block, commit."""
+    ctx = gh.context_from_streamlit(st)
+    current_yaml = gh.read_file(ctx, _SCRAPE_WORKFLOW_PATH)
+    new_yaml = _rewrite_cron_in_workflow(current_yaml, FREQ_CHOICES[choice]["crons"])
+    if new_yaml == current_yaml:
+        return  # already at the target — no-op
+    msg = (
+        f"chore(schedule): set scrape cron to {choice.lower()} "
+        f"({roles.audit_stamp(principal.email, 'update schedule')})"
+    )
+    gh.put_file(ctx, _SCRAPE_WORKFLOW_PATH, new_yaml, msg)
+
+
+def _rewrite_cron_in_workflow(
+    yaml_text: str, crons: list[tuple[str, str]]
+) -> str:
+    """Replace the `schedule:` block's cron entries in a workflow YAML.
+
+    Preserves surrounding indentation, comments on unrelated lines, and
+    anything else in the workflow. Only touches the cron lines directly
+    under `schedule:`.
+    """
+    def _replace(match: re.Match) -> str:
+        schedule_line = match.group(1)
+        old_block = match.group(2)
+        first = old_block.splitlines(keepends=True)[0]
+        indent = first[: len(first) - len(first.lstrip())]
+        new_block = "".join(
+            f'{indent}- cron: "{c}"   # {cmt}\n' if cmt else f'{indent}- cron: "{c}"\n'
+            for c, cmt in crons
+        )
+        return schedule_line + new_block
+
+    new_text, n = _SCHEDULE_BLOCK_RE.subn(_replace, yaml_text, count=1)
+    if n == 0:
+        raise RuntimeError(
+            f"Couldn't find a `schedule:` block in {_SCRAPE_WORKFLOW_PATH}. "
+            "Edit the file manually once and re-try."
+        )
+    return new_text
 
 
 # =================================================================
