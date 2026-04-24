@@ -18,6 +18,10 @@ httpx[socks]>=0.27.0
 # Bumped to 1.42+ for native st.login() (Google OIDC) used by auth.py.
 # See MULTI_APP_DESIGN.md §3.3 for the [auth] secrets block.
 streamlit>=1.42.0,<2.0.0
+# Authlib is NOT a transitive dep of streamlit — st.login() raises
+# StreamlitAuthError at runtime when it's missing. Must be pinned here
+# so the Streamlit Cloud build installs it alongside streamlit itself.
+Authlib>=1.3.2,<2.0.0
 plotly>=5.20.0,<7.0.0
 
 # Multi-app + RBAC (Apr 2026).
