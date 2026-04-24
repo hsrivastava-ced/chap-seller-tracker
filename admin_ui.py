@@ -178,6 +178,9 @@ def _render_apps_tab(principal: roles.UserPrincipal):
         }
         rows = []
         for a in apps:
+            # str() to survive PyYAML auto-coercing unquoted ISO-like
+            # timestamps into datetime objects (can't slice a datetime).
+            added_at_str = str(a.added_at) if a.added_at else "—"
             rows.append({
                 "App": a.label,
                 "Id": a.id,
@@ -187,7 +190,7 @@ def _render_apps_tab(principal: roles.UserPrincipal):
                 # Short handle instead of full email for readability.
                 "Added by": (a.added_by or "—").split("@")[0],
                 # Just the date portion — full timestamp is overkill here.
-                "Added": (a.added_at or "—")[:10],
+                "Added": added_at_str[:10],
             })
         st.dataframe(rows, hide_index=True, use_container_width=True)
 
@@ -639,7 +642,31 @@ def _render_schedule_section(principal: roles.UserPrincipal) -> None:
                     f"UI within ~30 s so the 'current' label refreshes."
                 )
             except Exception as e:
-                st.error(f"Couldn't update schedule: {e}")
+                # A 403 on .github/workflows/*.yml means the PAT lacks the
+                # Workflows write permission — GitHub enforces that on top
+                # of contents:write. Surface a targeted fix instead of the
+                # raw API blob.
+                msg = str(e)
+                is_perm = (
+                    "403" in msg
+                    and ("workflow" in msg.lower() or "Resource not accessible" in msg)
+                )
+                if is_perm:
+                    st.error(
+                        "Couldn't update the workflow file — your GitHub PAT is "
+                        "missing the **Workflows: Read and write** permission.\n\n"
+                        "Fix (fine-grained PAT):  GitHub → Settings → Developer "
+                        "settings → Personal access tokens → Fine-grained tokens "
+                        "→ edit your token → Repository permissions → set "
+                        "**Workflows** to *Read and write* → Update. Then paste "
+                        "the refreshed token into Streamlit Cloud secrets under "
+                        "`[github].pat` and reboot the app.\n\n"
+                        "(If you're on a classic PAT, the scope is `workflow`.)"
+                    )
+                    with st.expander("Raw error"):
+                        st.code(msg)
+                else:
+                    st.error(f"Couldn't update schedule: {e}")
 
 
 def _detect_current_schedule_label() -> Optional[str]:
