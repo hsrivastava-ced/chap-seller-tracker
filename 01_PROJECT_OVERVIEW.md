@@ -1,10 +1,12 @@
-# Project Overview: CedCommerce Seller Tracker
+# Project Overview: cHAP Multi-Admin Tracker
 
 ## Goal
-Automated tracking of the CedCommerce Admin Panel to monitor seller growth, platform-specific installs (Shopify/Shein), and uninstall trends.
+Automated tracking of the Common Home Admin Panel (cHAP) for three specific integration apps:
+1. **shopify_temu**
+2. **shein**
+3. **shopify_temu_eu**
 
-## Core Metrics to Track
-1. **Total Active Sellers:** Currently 349 (from the 'Seller List' header).
-2. **Platform Connections:** Identify which sellers are on Shopify vs. Shein.
-3. **Usage KPIs:** Order Count and Product Count (via 'Customize Grid').
-4. **Churn:** Real-time monitoring of the 'Uninstalls' tab.
+## Core Objectives
+- **Dropdown Logic:** Dynamically select the correct app from the "Select the Integration Apps" menu.
+- **Unified Scrape:** Use a single login portal to cycle through all three accounts.
+- **Metric Monitoring:** Track seller growth and uninstalls specifically for these three app categories.

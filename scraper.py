@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
 from config import APP_IDS, LOGIN_URL, USERNAME, PASSWORD, HEADLESS, CREDENTIALS
+import scrape_validator as sv
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -18,6 +19,12 @@ ERROR_SHOT_FILE = "error_debug.png"
 RESULTS_DIR = Path("results")
 LATEST_DIR = RESULTS_DIR / "latest"
 HISTORY_DIR = RESULTS_DIR / "history"
+# Staging lands alongside latest/; we promote it atomically only when every
+# per-app validation report clears `is_promotable`. When validation blocks
+# the run, latest/ is left UNTOUCHED — consumers (dashboard, Supabase push)
+# keep reading the previous good snapshot — and INVALID_RUN.md lands in
+# latest/ as a breadcrumb for the next operator.
+STAGING_DIR = RESULTS_DIR / "staging"
 
 # Canonical column order for CSVs — keeps every run's columns stable even
 # though not every app populates every field (e.g. shein-only `app_type`).
@@ -672,6 +679,7 @@ def _scrape_paginated_ant_table(
     max_pages: int | None = None,
     extractor=None,
     dedup_key=None,
+    trace_sink: list | None = None,
 ) -> list:
     """
     Walk an AntD table + inte-* pagination and return every row as a dict.
@@ -705,6 +713,11 @@ def _scrape_paginated_ant_table(
     page_num = 1
     seen_ids = set()     # guard against duplicate pages on slow renders
     header_index = None  # built lazily on first successful page
+    # Per-page trace for scrape_validator.check_pagination. Only populated
+    # when caller supplies a sink list. Each entry is a dict; scraper.main()
+    # converts them to PageTrace dataclass instances before validating.
+    total_rows_reported: int | None = None
+    total_pages_reported: int | None = None
 
     # Default extractor returns a single dict per row; callers can supply
     # one that returns a list (uninstalls expand one row → many events).
@@ -908,6 +921,27 @@ def _scrape_paginated_ant_table(
 
         logging.info(f"   ↳ captured {new_on_page} new rows (total {len(rows_out)})")
 
+        # --- Trace sink for the post-run validator ---------------------
+        # Record observations about this page BEFORE we try to paginate.
+        # The validator uses these to check: (a) page numbers increment
+        # by 1, (b) first-row keys are unique across pages, (c) scraped
+        # total matches reported total within tolerance, (d) no empty
+        # intermediate pages.
+        if trace_sink is not None:
+            try:
+                first_row_key_this = ""
+                if rows.count() > 0:
+                    first_row_key_this = rows.nth(0).get_attribute("data-row-key") or ""
+            except Exception:
+                first_row_key_this = ""
+            trace_sink.append({
+                "page_num": page_num,
+                "first_row_key": first_row_key_this,
+                "row_count": rows.count(),
+                "reported_total_rows": total_rows_reported,
+                "reported_total_pages": total_pages_reported,
+            })
+
         if max_pages is not None and page_num >= max_pages:
             break
 
@@ -960,6 +994,19 @@ def _scrape_paginated_ant_table(
                     logging.info(f"   ↳ pagination reports {total_pages_reported} total pages")
             except Exception:
                 pass
+
+        # Also parse the "Showing 1 - N of TOTAL" chip (different DOM node
+        # from the "of N pages" text above). The validator uses this as
+        # the reference total-row count for the tolerance check.
+        try:
+            showing_text = page.locator(
+                "div.inte-Pagination div.inte-flex__item > span"
+            ).first.inner_text()
+            m2 = re.search(r"of\s+(\d+)", showing_text or "")
+            if m2:
+                total_rows_reported = int(m2.group(1))
+        except Exception:
+            pass
 
         # Best-effort current-page indicator: the <input> in the pagination
         # bar shows the active page number. We read it to detect page skips
@@ -1204,7 +1251,11 @@ def _scrape_paginated_ant_table(
     return rows_out
 
 
-def customize_grid_select_all(page, app_name: str) -> bool:
+def customize_grid_select_all(
+    page,
+    app_name: str,
+    observed_labels_sink: list | None = None,
+) -> bool:
     """
     Open the "Customize Grid" dropdown on the Seller List page and tick
     every available column checkbox, then close the panel so the table
@@ -1544,6 +1595,7 @@ def customize_grid_select_all(page, app_name: str) -> bool:
         return False
 
     target_labels: list[str] = []
+    observed_labels: list[str] = []  # EVERY non-empty label we see, ticked or not
     already_on = 0
     for i in range(total):
         li = options_now.nth(i)
@@ -1560,12 +1612,19 @@ def customize_grid_select_all(page, app_name: str) -> bool:
                 # Skip empty labels — their substring-match would auto-pass
                 # column verification, corrupting the integrity check.
                 continue
+            observed_labels.append(label_text)
             if is_checked:
                 already_on += 1
                 continue
             target_labels.append(label_text)
         except Exception as err:
             logging.debug(f"   ↳ enumerate option #{i} failed ({err}); skipping")
+
+    # Surface the full observed label set to the caller so scrape_validator
+    # can diff it against grid_columns.yaml. Populated whether or not any
+    # ticking succeeds — the diff is what matters, not the action.
+    if observed_labels_sink is not None:
+        observed_labels_sink.extend(observed_labels)
 
     logging.info(
         f"   ↳ Customize Grid ({total} options): {already_on} already on, "
@@ -2003,11 +2062,15 @@ def set_page_size_100(page, app_name: str) -> bool:
     return settled
 
 
-def scrape_seller_table(page, app_name, max_pages=None):
+def scrape_seller_table(page, app_name, max_pages=None, trace_sink: list | None = None):
     """
     Scrape the Seller List table across ALL pages. Thin wrapper over the
     generic `_scrape_paginated_ant_table`; kept as a separate name so
     callers reading `main()` can see seller-vs-uninstall intent at a glance.
+
+    `trace_sink` — if provided, the paginator appends one entry per page
+    (page_num, first_row_key, row_count, reported_total_rows,
+    reported_total_pages) for downstream pagination sanity checks.
     """
     # Unconditional baseline DOM dump of the seller table post-customize
     # (or default if customize failed) — same pattern we use for uninstalls.
@@ -2018,7 +2081,8 @@ def scrape_seller_table(page, app_name, max_pages=None):
         filename=f"debug_dom_seller_{safe_label}.txt",
     )
     return _scrape_paginated_ant_table(
-        page, app_name, aliases=HEADER_ALIASES, max_pages=max_pages
+        page, app_name, aliases=HEADER_ALIASES, max_pages=max_pages,
+        trace_sink=trace_sink,
     )
 
 
@@ -2123,7 +2187,9 @@ def navigate_to_uninstalls(page) -> None:
     page.wait_for_timeout(250)
 
 
-def scrape_uninstalls_table(page, app_name, max_pages=None) -> list:
+def scrape_uninstalls_table(
+    page, app_name, max_pages=None, trace_sink: list | None = None,
+) -> list:
     """
     Scrape the Uninstalls table across all pages for one app. Assumes the
     page is already on the uninstalls view (call `navigate_to_uninstalls`
@@ -2159,6 +2225,7 @@ def scrape_uninstalls_table(page, app_name, max_pages=None) -> list:
         max_pages=max_pages,
         extractor=extract_uninstall_row,
         dedup_key=_uninstall_dedup,
+        trace_sink=trace_sink,
     )
 
 
@@ -2183,10 +2250,36 @@ def _write_csv(path: Path, rows: list, columns: list) -> None:
             w.writerow({k: r.get(k, "") for k in columns})
 
 
+def _load_previous_counts() -> dict:
+    """
+    Peek at the existing `results/latest/` CSVs before they get overwritten.
+    Returns `{"sellers": {app: N}, "uninstalls": {app: N}}`. Missing files =
+    0 (first run). Used by scrape_validator.check_row_count to guard against
+    silent data-loss (e.g. a pagination regression that returns 1 page).
+    """
+    prev = {"sellers": {}, "uninstalls": {}}
+    if not LATEST_DIR.exists():
+        return prev
+    for p in LATEST_DIR.glob("*.csv"):
+        try:
+            with p.open("r", encoding="utf-8") as f:
+                # Subtract 1 for the header line. Empty file → 0.
+                n = max(0, sum(1 for _ in f) - 1)
+        except Exception:
+            n = 0
+        name = p.stem
+        if name.endswith("_uninstalls"):
+            prev["uninstalls"][name[: -len("_uninstalls")]] = n
+        else:
+            prev["sellers"][name] = n
+    return prev
+
+
 def persist_results(
     sellers_by_app: dict,
     uninstalls_by_app: dict | None = None,
     stamp: str | None = None,
+    promote_latest: bool = True,
 ) -> dict:
     """
     Write per-app seller + uninstall CSVs (latest + history) and a combined
@@ -2196,31 +2289,50 @@ def persist_results(
     Output layout:
 
         results/
-          latest/
-            <app>.csv                  # sellers
-            <app>_uninstalls.csv       # uninstalls (Phase 2.4)
-            run.json                   # mirror of the history snapshot
+          latest/                          # only touched when promote_latest
+            <app>.csv                      # sellers
+            <app>_uninstalls.csv           # uninstalls (Phase 2.4)
+            run.json                       # mirror of the history snapshot
           history/
-            <stamp>/
+            <stamp>/                       # always written (audit trail)
               <app>.csv
               <app>_uninstalls.csv
               run.json
+          staging/<stamp>/                 # written when promote_latest=False
+            <app>.csv                      # — the run is preserved verbatim,
+            <app>_uninstalls.csv             but NOT visible to the dashboard
+            run.json                         until a super admin promotes it.
+
+    When `promote_latest=False` the previous `latest/` is left untouched so
+    consumers keep reading the last-good snapshot. This is the guardrail
+    that lets scrape_validator refuse a partially-corrupt run.
 
     Returns a dict with the paths written, so main() can log them clearly.
     """
     stamp = stamp or _now_stamp()
-    LATEST_DIR.mkdir(parents=True, exist_ok=True)
     history_run_dir = HISTORY_DIR / stamp
     history_run_dir.mkdir(parents=True, exist_ok=True)
+    # Staging dir is only used when we DON'T promote — keeps the failed
+    # run's bytes on disk for post-mortem without stepping on latest/.
+    staging_run_dir = STAGING_DIR / stamp
+    target_dir = LATEST_DIR if promote_latest else staging_run_dir
+    target_dir.mkdir(parents=True, exist_ok=True)
 
     uninstalls_by_app = uninstalls_by_app or {}
-    written = {"latest": {}, "history": {}, "json": None}
+    written = {
+        "latest": {},
+        "history": {},
+        "staging": {},
+        "json": None,
+        "promoted": promote_latest,
+    }
+    dest_bucket = "latest" if promote_latest else "staging"
 
     # --- sellers ---
     for app_name, rows in sellers_by_app.items():
-        latest_path = LATEST_DIR / f"{app_name}.csv"
-        _write_csv(latest_path, rows, CSV_COLUMNS)
-        written["latest"][app_name] = str(latest_path)
+        target_path = target_dir / f"{app_name}.csv"
+        _write_csv(target_path, rows, CSV_COLUMNS)
+        written[dest_bucket][app_name] = str(target_path)
         hist_path = history_run_dir / f"{app_name}.csv"
         _write_csv(hist_path, rows, CSV_COLUMNS)
         written["history"][app_name] = str(hist_path)
@@ -2228,9 +2340,9 @@ def persist_results(
     # --- uninstalls ---
     for app_name, rows in uninstalls_by_app.items():
         key = f"{app_name}_uninstalls"
-        latest_path = LATEST_DIR / f"{key}.csv"
-        _write_csv(latest_path, rows, UNINSTALL_CSV_COLUMNS)
-        written["latest"][key] = str(latest_path)
+        target_path = target_dir / f"{key}.csv"
+        _write_csv(target_path, rows, UNINSTALL_CSV_COLUMNS)
+        written[dest_bucket][key] = str(target_path)
         hist_path = history_run_dir / f"{key}.csv"
         _write_csv(hist_path, rows, UNINSTALL_CSV_COLUMNS)
         written["history"][key] = str(hist_path)
@@ -2251,9 +2363,11 @@ def persist_results(
     }
     json_path = history_run_dir / "run.json"
     json_path.write_text(json.dumps(run_json, indent=2, ensure_ascii=False), encoding="utf-8")
-    # Convenience: also mirror to results/latest/run.json.
-    latest_json = LATEST_DIR / "run.json"
-    latest_json.write_text(json.dumps(run_json, indent=2, ensure_ascii=False), encoding="utf-8")
+    # Mirror to whichever bucket this run is targeting. Blocked runs land
+    # in staging/<stamp>/run.json and leave latest/run.json untouched —
+    # the dashboard keeps rendering the last-good snapshot.
+    mirror_json = target_dir / "run.json"
+    mirror_json.write_text(json.dumps(run_json, indent=2, ensure_ascii=False), encoding="utf-8")
     written["json"] = str(json_path)
 
     return written
@@ -2264,6 +2378,19 @@ def persist_results(
 # ---------------------------------------------------------------------------
 
 def main():
+    # Snapshot the previous run's row counts BEFORE any scraping so we can
+    # diff them against this run. Drop >50% = block; >20% = pending_review.
+    previous_counts = _load_previous_counts()
+    grid_cfg = sv._load_grid_columns()
+
+    # Per-app validator context lives outside playwright so a browser crash
+    # can't lose it. `traces` holds the pagination traces produced by the
+    # paginator's trace_sink; `observed_labels` holds what Customize Grid
+    # showed us.
+    seller_traces: dict[str, list] = {}
+    uninstall_traces: dict[str, list] = {}
+    observed_labels_by_app: dict[str, list] = {}
+
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=HEADLESS)
 
@@ -2294,14 +2421,20 @@ def main():
                 # Tick every available column so optional KPIs like
                 # Order Count / Product Count land in the CSV. Non-fatal:
                 # if the widget isn't found, the scraper still runs with
-                # whatever default columns the dashboard rendered.
+                # whatever default columns the dashboard rendered. The
+                # observed_labels sink captures the full popup label set so
+                # scrape_validator can diff it against grid_columns.yaml.
+                observed_labels: list[str] = []
                 try:
-                    customize_grid_select_all(page, app_name)
+                    customize_grid_select_all(
+                        page, app_name, observed_labels_sink=observed_labels,
+                    )
                 except Exception:
                     logging.exception(
                         f"Customize Grid step raised for {app_name}; "
                         "continuing with default columns."
                     )
+                observed_labels_by_app[app_name] = observed_labels
 
                 # --- Page size: 20 → 100 (perf) ---
                 # Do this AFTER Customize Grid so the grid-column-sticking
@@ -2319,7 +2452,11 @@ def main():
                     )
 
                 # --- Sellers ---
-                sellers = scrape_seller_table(page, app_name)  # all pages
+                seller_trace: list = []
+                sellers = scrape_seller_table(
+                    page, app_name, trace_sink=seller_trace,
+                )
+                seller_traces[app_name] = seller_trace
                 logging.info(f"⭐ SELLERS: Found {len(sellers)} for {app_name}.")
                 all_sellers[app_name] = sellers
                 for idx, seller in enumerate(sellers[:5], start=1):
@@ -2330,7 +2467,11 @@ def main():
                 # wipe the seller data we already scraped successfully.
                 try:
                     navigate_to_uninstalls(page)
-                    uninstalls = scrape_uninstalls_table(page, app_name)
+                    uninstall_trace: list = []
+                    uninstalls = scrape_uninstalls_table(
+                        page, app_name, trace_sink=uninstall_trace,
+                    )
+                    uninstall_traces[app_name] = uninstall_trace
                     logging.info(
                         f"🗑️  UNINSTALLS: Found {len(uninstalls)} for {app_name}."
                     )
@@ -2349,7 +2490,72 @@ def main():
                 context.close()
         browser.close()
 
-    # Persist outside the playwright context — no browser needed for this.
+    # --- Validation (Phase: fail-proof guardrail) ---------------------------
+    # Build one ValidationReport per (app, kind). If ANY report flags
+    # `status=blocked` we refuse to overwrite the previous `latest/` and
+    # drop the run into `results/staging/<stamp>/` instead. A markdown
+    # breadcrumb (INVALID_RUN.md) lands in latest/ so the next operator
+    # (or admin UI) can see that the latest snapshot is stale-by-design.
+    all_reports: list = []
+
+    def _traces_to_pagetraces(raw: list) -> list:
+        return [sv.PageTrace(
+            page_num=e.get("page_num", 0),
+            first_row_key=e.get("first_row_key", ""),
+            row_count=e.get("row_count", 0),
+            reported_total_rows=e.get("reported_total_rows"),
+            reported_total_pages=e.get("reported_total_pages"),
+        ) for e in raw]
+
+    for app_name in list(all_sellers.keys()) + [
+        a for a in all_uninstalls.keys() if a not in all_sellers
+    ]:
+        seller_rows = all_sellers.get(app_name, [])
+        seller_report = sv.validate_app(
+            app_name=app_name,
+            kind="sellers",
+            observed_grid_labels=observed_labels_by_app.get(app_name, []),
+            pagination_trace=_traces_to_pagetraces(seller_traces.get(app_name, [])),
+            scraped_row_count=len(seller_rows),
+            previous_row_count=previous_counts["sellers"].get(app_name, 0),
+            grid_cfg=grid_cfg,
+        )
+        all_reports.append(seller_report)
+
+        if app_name in all_uninstalls:
+            uninstall_rows = all_uninstalls[app_name]
+            # Uninstalls don't have a Customize Grid popup, so observed_labels
+            # is empty and the grid check is a no-op for them (validator
+            # treats empty observed as "not applicable").
+            uninstall_report = sv.validate_app(
+                app_name=app_name,
+                kind="uninstalls",
+                observed_grid_labels=None,
+                pagination_trace=_traces_to_pagetraces(uninstall_traces.get(app_name, [])),
+                scraped_row_count=len(uninstall_rows),
+                previous_row_count=previous_counts["uninstalls"].get(app_name, 0),
+                grid_cfg=grid_cfg,
+            )
+            all_reports.append(uninstall_report)
+
+    promote = all(r.is_promotable for r in all_reports) if all_reports else False
+    blocked = [r for r in all_reports if r.status == "blocked"]
+    pending = [r for r in all_reports if r.status == "pending_review"]
+
+    if blocked:
+        logging.warning(
+            f"🛑 Validation BLOCKED this run ({len(blocked)} report(s) "
+            f"flagged). Previous latest/ snapshot preserved."
+        )
+        for r in blocked:
+            logging.warning(f"   ↳ {r.app_name} / {r.kind}: blocked")
+    elif pending:
+        logging.warning(
+            f"⚠️  {len(pending)} validator report(s) flagged pending_review. "
+            f"Promoting anyway (soft signal only); admin UI should surface."
+        )
+
+    # --- Persist -----------------------------------------------------------
     if all_sellers or all_uninstalls:
         try:
             stamp = _now_stamp()
@@ -2357,16 +2563,43 @@ def main():
                 all_sellers,
                 uninstalls_by_app=all_uninstalls,
                 stamp=stamp,
+                promote_latest=promote,
             )
             seller_total = sum(len(v) for v in all_sellers.values())
             uninstall_total = sum(len(v) for v in all_uninstalls.values())
+            bucket = "latest" if promote else "staging"
             logging.info(
                 f"💾 Persisted {seller_total} sellers + {uninstall_total} "
-                f"uninstalls across {len(all_sellers)} apps."
+                f"uninstalls across {len(all_sellers)} apps → {bucket}/"
             )
-            for key, path in written["latest"].items():
-                logging.info(f"   ↳ latest: {path}")
+            for key, path in written[bucket].items():
+                logging.info(f"   ↳ {bucket}: {path}")
             logging.info(f"   ↳ run snapshot: {written['json']}")
+
+            # If validation blocked: drop a markdown breadcrumb INTO latest/
+            # so anyone opening the dashboard sees *why* the numbers look
+            # stale. Also write the full validator report next to it for
+            # post-mortem. `latest/` CSVs themselves are untouched.
+            if not promote:
+                LATEST_DIR.mkdir(parents=True, exist_ok=True)
+                report_md = sv.format_run_report(
+                    all_reports,
+                    promoted=False,
+                    stamp=stamp,
+                )
+                (LATEST_DIR / "INVALID_RUN.md").write_text(
+                    report_md, encoding="utf-8",
+                )
+                logging.warning(
+                    f"   ↳ breadcrumb written: {LATEST_DIR / 'INVALID_RUN.md'}"
+                )
+            else:
+                # Happy path: clear any stale breadcrumb from a previous
+                # blocked run so the dashboard doesn't keep showing the
+                # warning after the issue is resolved.
+                stale = LATEST_DIR / "INVALID_RUN.md"
+                if stale.exists():
+                    stale.unlink()
         except Exception:
             logging.exception("Failed to persist results; in-memory data is intact.")
     else:

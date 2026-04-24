@@ -1,0 +1,58 @@
+# grid_columns.yaml — canonical Customize Grid labels per app.
+#
+# This file is the ground truth for "what columns SHOULD the Customize Grid
+# popup expose". When the scraper opens the popup it enumerates every
+# checkbox label; `scrape_validator.check_customize_grid(...)` diffs that
+# observed list against the entry here and classifies the run.
+#
+# Columns live in two buckets:
+#
+#   required — MUST be present in the popup. Missing ANY of these means
+#              the admin panel changed materially — the scraper will
+#              refuse to overwrite the last-good CSVs. Operator must
+#              either (a) rotate the admin panel back, or (b) update this
+#              file to match the new reality (via the admin-UI drift
+#              approval flow).
+#
+#   optional — known-good labels that may or may not appear. Present →
+#              they get ticked. Absent → fine, life goes on.
+#
+# Anything in the observed-list that is NEITHER required nor optional is
+# "unexpected". Unexpected labels do NOT block the run (the Customize Grid
+# would still tick them — we always tick everything we see), but they
+# flip the run to `pending_review` schema status so a super admin has to
+# confirm the new column is fine before it lands in the canonical CSVs.
+#
+# Rules:
+#   - Labels are matched case-insensitively, whitespace-collapsed.
+#   - `default` is used if there's no app-specific override.
+#   - When you add a new app via the admin UI wizard, it inherits
+#     `default` until a super admin promotes an observed set into a
+#     per-app override (via grid_columns.yaml commit).
+schema_version: 1
+
+default:
+  required:
+    - "Seller Id"
+    - "Store Url"
+    - "Username"
+    - "Email Id"
+    - "Installed On"
+    - "Marketplace/Platform Connected"
+    - "Action"
+  optional:
+    - "App Type"
+    - "Source Country"
+    - "Order Count"
+    - "Product Count"
+    - "Failed Orders"
+    - "Steps Completed"
+    - "Plan Details"
+    - "Last Sync"
+    - "Webhooks"
+
+# Per-app overrides. Only add here if an app's Customize Grid exposes a
+# distinct column set from `default`. As of 2026-04-24 all 3 configured
+# apps (shein / shopify_temu / shopify_temu_eu) match `default`, so no
+# overrides are needed.
+apps: {}

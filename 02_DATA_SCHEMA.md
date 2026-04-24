@@ -1,22 +1,31 @@
 # Database Schema (Supabase)
 
 ### 1. Table: `snapshots`
-Stores every successful scrape.
-- `id`: uuid (primary key)
-- `created_at`: timestamp with timezone
-- `raw_data`: jsonb (the scraped payload)
-- `status`: text (success/fail)
+Stores every individual scrape result. 
+- `id`: uuid (PK)
+- `admin_source`: text (e.g., 'Admin_A', 'Admin_B')
+- `seller_id`: text
+- `store_url`: text
+- `email`: text
+- `platforms`: jsonb (e.g., ["Shopify", "Shein"])
+- `order_count`: int
+- `product_count`: int
+- `installed_on`: timestamp
+- `scraped_at`: timestamp (default: now())
 
-### 2. Table: `metrics`
-Stores computed KPIs after Pandas processing.
-- `id`: uuid
-- `timestamp`: timestamp
-- `metric_name`: text
-- `value`: float
-- `delta_from_previous`: float
+### 2. Table: `uninstalls_log`
+- `id`: uuid (PK)
+- `admin_source`: text
+- `user_id`: text
+- `email`: text
+- `platform`: text
+- `uninstalled_at`: timestamp
+- `username`: text
 
-### 3. Table: `alerts_log`
-- `id`: uuid
-- `triggered_at`: timestamp
-- `alert_type`: text
-- `message`: text
+### 3. Table: `metrics_daily`
+Computed aggregates for the dashboard.
+- `date`: date (PK)
+- `admin_source`: text (PK)
+- `total_active_sellers`: int
+- `new_installs`: int
+- `new_uninstalls`: int

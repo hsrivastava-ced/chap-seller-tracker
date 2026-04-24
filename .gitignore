@@ -3,3 +3,24 @@
 __pycache__/
 *.pyc
 pytest-cache-files-*/
+
+# Added by code-review-graph
+.code-review-graph/
+
+# User-specific MCP config (absolute binary paths)
+.mcp.json
+
+# Local Claude Code settings (per-user)
+.claude/settings.local.json
+
+# Runtime artifacts from scraper runs
+live_test.log
+debug_dom*.txt
+error_*.png
+
+# Per-run data artifacts (code lives in-repo; data does not)
+results/staging/
+results/history/
+results/latest/*.csv
+results/latest/*.json
+results/latest/INVALID_RUN.md
