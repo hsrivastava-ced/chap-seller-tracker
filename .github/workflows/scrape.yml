@@ -99,73 +99,36 @@ jobs:
         run: |
           python -m playwright install --with-deps chromium
 
-      - name: Unpack CREDS into job env (Python parse — no shell interpolation)
-        # The CREDS secret holds KEY="value" lines (APP_1_ID/USER/PASS
-        # through APP_3_*, optionally LOGIN_URL / SUPABASE_*). We parse
-        # it in Python rather than `source`ing it in bash because the
-        # passwords legitimately contain shell-special characters like
-        # `$`, backticks, and backslashes. Bash `source` would interpret
-        # e.g. `VY2$pi9AT@%i!1u` as containing a `$pi9AT` variable
-        # reference and silently mangle the password to `VY2@%i!1u`,
-        # which the login server then rejects.
+      - name: Unpack repo secrets into job env
+        # Each app's credentials live in their own repo secrets
+        # (APP_N_USER, APP_N_PASS) — admin_ui.py writes them directly
+        # on onboard via the Actions Secrets API. We expose ALL repo
+        # secrets via `toJSON(secrets)` and then filter to the ones
+        # apps.yaml expects, so the workflow scales automatically as
+        # new apps land without ever touching scrape.yml.
         #
-        # Output: writes each parsed KEY=value to $GITHUB_ENV so the
-        # next step's `python scraper.py` sees them via os.getenv().
-        # GitHub parses $GITHUB_ENV literally — no shell interpolation —
-        # so special characters round-trip intact. We use the multiline
-        # heredoc format (KEY<<DELIM ... DELIM) for maximum safety with
-        # any character that could appear in a password.
+        # Why Python, not bash: passwords legitimately contain `$`,
+        # backticks, backslashes; shell `source`/`eval` would mangle
+        # them silently. Python reads the JSON verbatim, then writes
+        # KEY<<DELIM heredocs to $GITHUB_ENV — GitHub doesn't do any
+        # shell interpolation on that file, so values round-trip intact.
+        #
+        # Legacy fallback: if individual APP_N_* secrets aren't set but
+        # the old CREDS bundle secret is, we parse that too. This gives
+        # pre-migration setups one more successful run while the admin
+        # completes the cut-over to individual secrets.
         shell: bash
         env:
-          CREDS: ${{ secrets.CREDS }}
-          LOGIN_URL_TOP: ${{ secrets.LOGIN_URL }}
-          SUPABASE_URL_TOP: ${{ secrets.SUPABASE_URL }}
-          SUPABASE_KEY_TOP: ${{ secrets.SUPABASE_KEY }}
+          SECRETS_JSON: ${{ toJSON(secrets) }}
         run: |
           set -e
           python - <<'PY'
-          import os, re, sys, secrets as _secrets
+          import os, json, re, sys, secrets as _secrets
 
-          creds = os.environ.get("CREDS", "")
-          if not creds.strip():
-              print("::error::CREDS secret is empty — set it under Settings → Secrets and variables → Actions.")
-              sys.exit(1)
+          data = json.loads(os.environ.get("SECRETS_JSON") or "{}")
 
-          # Parse dotenv-style KEY=value / KEY="value" / KEY='value' lines.
-          # NO shell expansion — values are taken literally.
-          parsed = {}
-          line_re = re.compile(
-              r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$'
-          )
-          for raw in creds.splitlines():
-              line = raw.rstrip("\r")
-              if not line.strip() or line.lstrip().startswith("#"):
-                  continue
-              m = line_re.match(line)
-              if not m:
-                  continue
-              key, val = m.group(1), m.group(2)
-              # Strip surrounding matching quotes, if any.
-              if len(val) >= 2 and val[0] == val[-1] and val[0] in ('"', "'"):
-                  val = val[1:-1]
-              parsed[key] = val
-
-          # Fill in any top-level secrets the CREDS block didn't set.
-          for k, envk in (
-              ("LOGIN_URL",    "LOGIN_URL_TOP"),
-              ("SUPABASE_URL", "SUPABASE_URL_TOP"),
-              ("SUPABASE_KEY", "SUPABASE_KEY_TOP"),
-          ):
-              if not parsed.get(k):
-                  v = os.environ.get(envk, "")
-                  if v:
-                      parsed[k] = v
-
-          # Preflight: fail loudly if anything critical is still missing.
-          # Derived from apps.yaml so the list grows automatically as
-          # admins onboard new panels through the UI. _ID env vars are NO
-          # LONGER required — apps.yaml stores dropdown_value directly,
-          # and app_registry.credentials_for() only reads _USER / _PASS.
+          # Derive required env var names from apps.yaml so onboarding
+          # a new app never requires a workflow edit.
           import yaml
           try:
               registry = yaml.safe_load(open("apps.yaml")) or {}
@@ -175,39 +138,58 @@ jobs:
           required = ["LOGIN_URL"]
           for app in (registry.get("apps") or []):
               ref = (app.get("creds_ref") or "").strip()
-              if not ref:
-                  continue
-              required.extend([f"{ref}_USER", f"{ref}_PASS"])
-          missing = [k for k in required if not parsed.get(k)]
+              if ref:
+                  required.extend([f"{ref}_USER", f"{ref}_PASS"])
+
+          # Start with whatever is in individual repo secrets.
+          unpacked = {k: data[k] for k in required if data.get(k)}
+
+          # Legacy fallback: fill any still-missing keys from a CREDS
+          # bundle if it exists. Harmless once everything is migrated to
+          # individual secrets — the bundle just won't be parsed.
+          if any(k not in unpacked for k in required):
+              creds = data.get("CREDS") or ""
+              if creds.strip():
+                  line_re = re.compile(
+                      r'^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$'
+                  )
+                  for raw in creds.splitlines():
+                      line = raw.rstrip("\r")
+                      if not line.strip() or line.lstrip().startswith("#"):
+                          continue
+                      m = line_re.match(line)
+                      if not m:
+                          continue
+                      k, v = m.group(1), m.group(2)
+                      if len(v) >= 2 and v[0] == v[-1] and v[0] in ('"', "'"):
+                          v = v[1:-1]
+                      unpacked.setdefault(k, v)
+
+          # Preflight: fail loudly with actionable guidance.
+          missing = [k for k in required if not unpacked.get(k)]
           if missing:
-              print(f"::error::Missing required env keys: {', '.join(missing)}")
-              print('::error::Put them inside the CREDS secret as KEY="value" lines, or set LOGIN_URL as its own secret.')
+              print(f"::error::Missing required secrets: {', '.join(missing)}")
+              print("::error::Add each one under Settings → Secrets and variables → Actions, or re-run the admin UI 'Add new app' form for the affected app(s).")
               sys.exit(1)
 
-          # Append to $GITHUB_ENV so subsequent steps inherit these vars.
-          # Multiline heredoc syntax: KEY<<DELIMITER \n <value> \n DELIMITER
-          # The delimiter must not appear inside the value — use a random
-          # per-run token to guarantee that.
-          gh_env_path = os.environ.get("GITHUB_ENV")
-          if not gh_env_path:
+          # Write to $GITHUB_ENV as multiline heredocs so any password
+          # character round-trips intact.
+          gh_env = os.environ.get("GITHUB_ENV")
+          if not gh_env:
               print("::error::GITHUB_ENV not set — are we running on GitHub Actions?")
               sys.exit(1)
 
-          with open(gh_env_path, "a", encoding="utf-8") as f:
-              for k, v in parsed.items():
+          with open(gh_env, "a", encoding="utf-8") as f:
+              for k, v in unpacked.items():
                   delim = "EOF_" + _secrets.token_hex(8)
-                  # Paranoia — if the random delimiter somehow clashes
-                  # with the value, regenerate.
-                  while delim in v:
+                  while delim in (v or ""):
                       delim = "EOF_" + _secrets.token_hex(8)
                   f.write(f"{k}<<{delim}\n{v}\n{delim}\n")
 
-          # Diagnostic: lengths only, never values. Lengths help us
-          # verify the right password made it through without revealing
-          # anything meaningful in the log.
-          print("Unpacked CREDS keys (value lengths only):")
-          for k in sorted(parsed):
-              print(f"  {k}: len={len(parsed[k])}")
+          # Diagnostic: key names and value lengths only — never log values.
+          print("Unpacked keys (value lengths only):")
+          for k in sorted(unpacked):
+              print(f"  {k}: len={len(unpacked[k])}")
           PY
 
       - name: Run scraper

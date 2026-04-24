@@ -94,7 +94,52 @@ def context_from_streamlit(st) -> RepoContext:
 
 
 # ---------------------------------------------------------------------
-# CREDS secret update
+# Generic single-secret writer (create or update)
+# ---------------------------------------------------------------------
+def put_repo_secret(ctx: RepoContext, name: str, value: str) -> None:
+    """Create or update one repo-level GitHub Actions secret.
+
+    Uses libsodium sealed-box encryption against the repo's public key,
+    then PUT /actions/secrets/<name>. GitHub treats absent + present
+    the same for PUT, so this covers both first-time creation and
+    rotation. Required PAT permission: Secrets: Read and write.
+
+    Named secrets are the right primitive for per-app credentials —
+    unlike the monolithic CREDS bundle, each write is idempotent and
+    independent, so adding app N+1 can't accidentally stomp app N.
+    The scrape workflow reads them back via `toJSON(secrets)`.
+    """
+    import requests
+    from nacl import public  # type: ignore
+
+    r = requests.get(
+        f"{ctx.base}/actions/secrets/public-key",
+        headers=ctx.headers,
+        timeout=15,
+    )
+    r.raise_for_status()
+    pk = r.json()
+    pk_bytes = base64.b64decode(pk["key"])
+
+    sealed = public.SealedBox(public.PublicKey(pk_bytes)).encrypt(
+        value.encode("utf-8")
+    )
+    encrypted_b64 = base64.b64encode(sealed).decode("utf-8")
+
+    r = requests.put(
+        f"{ctx.base}/actions/secrets/{name}",
+        headers=ctx.headers,
+        json={"encrypted_value": encrypted_b64, "key_id": pk["key_id"]},
+        timeout=15,
+    )
+    if r.status_code not in (201, 204):
+        raise RuntimeError(
+            f"GitHub rejected secret `{name}`: {r.status_code} {r.text}"
+        )
+
+
+# ---------------------------------------------------------------------
+# CREDS secret update (legacy — kept for historical callers)
 # ---------------------------------------------------------------------
 def append_creds_lines(ctx: RepoContext, new_lines: list[str]) -> None:
     """Append `KEY="value"` lines to the existing CREDS secret.

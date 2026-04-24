@@ -308,8 +308,6 @@ def _render_add_app_wizard(principal: roles.UserPrincipal):
         )
         return
 
-    # Vault is guaranteed present — the tab-level gate routes the user
-    # to Settings if `_creds_cache` is missing. Pull and commit.
     _commit_new_app(
         principal=principal,
         name=display_name.strip(),
@@ -319,7 +317,6 @@ def _render_add_app_wizard(principal: roles.UserPrincipal):
         password=password,
         wants_installs=wants_installs,
         wants_uninstalls=wants_uninstalls,
-        current_creds=st.session_state["_creds_cache"],
         run_after=run_after,
     )
 
@@ -334,10 +331,14 @@ def _commit_new_app(
     password: str,
     wants_installs: bool,
     wants_uninstalls: bool,
-    current_creds: str,
     run_after: bool,
 ) -> None:
-    """Do the three GitHub writes + optional dispatch. Shows per-step status."""
+    """Do the three GitHub writes + optional dispatch. Shows per-step status.
+
+    Each app's credentials live in their OWN repo secrets (APP_N_USER,
+    APP_N_PASS). We write them directly — no bundle round-trip, no
+    paste-back step. The workflow reads them via toJSON(secrets).
+    """
     try:
         ctx = gh.context_from_streamlit(st)
     except Exception as e:
@@ -352,42 +353,14 @@ def _commit_new_app(
         )
         return
 
-    # SAFETY: GitHub can't read CREDS back, so every put is a full replace.
-    # If the cached bundle doesn't cover every already-registered app,
-    # committing now would overwrite the secret and strand those apps.
-    # This check is belt-and-braces on top of the live preview warning
-    # in the vault section.
-    missing = _vault_missing_apps_for(current_creds)
-    if missing:
-        show_error(
-            "Can't add this app — your cached CREDS bundle is missing "
-            f"credentials for already-registered app(s): "
-            f"{', '.join('`'+m+'`' for m in missing)}. Saving now would "
-            "overwrite the GitHub secret and drop those apps' credentials.",
-            hint=(
-                "Go to **Settings → Credential vault → Replace bundle** "
-                "and paste the COMPLETE current CREDS body (all `APP_*_USER` "
-                "and `APP_*_PASS` lines together). The live preview will "
-                "confirm coverage before you unlock."
-            ),
-        )
-        return
-
     creds_ref = app_registry.next_creds_ref()
 
-    # 1. CREDS secret
+    # 1. Write the two per-app secrets. Each PUT is idempotent and
+    # independent, so a failure here never damages other apps' secrets.
     with st.status("Saving credentials…", expanded=False) as status:
         try:
-            new_body = gh.build_updated_creds(
-                current_creds,
-                {
-                    f"{creds_ref}_USER": email,
-                    f"{creds_ref}_PASS": password,
-                },
-            )
-            gh.append_creds_lines(ctx, [new_body])
-            # Cache for next add in same session.
-            st.session_state["_creds_cache"] = new_body
+            gh.put_repo_secret(ctx, f"{creds_ref}_USER", email)
+            gh.put_repo_secret(ctx, f"{creds_ref}_PASS", password)
             status.update(label="Credentials saved", state="complete")
         except Exception as e:
             status.update(label="Couldn't save credentials", state="error")
@@ -395,9 +368,9 @@ def _commit_new_app(
                 "We couldn't save the credentials for this app.",
                 hint=(
                     "Most likely the GitHub token is missing the "
-                    "**Secrets: Read and write** permission, or the paste "
-                    "in the CREDS bundle section has a formatting issue. "
-                    "Nothing has been committed — safe to try again."
+                    "**Secrets: Read and write** permission. Ask the admin "
+                    "to update the PAT and reboot the app. Nothing has been "
+                    "committed — safe to try again after the fix."
                 ),
                 cause=e,
             )
@@ -768,30 +741,16 @@ def _rewrite_cron_in_workflow(
 # Add-new-app tab — wrapper that gates on the credential vault
 # =================================================================
 def _render_add_app_tab(principal: roles.UserPrincipal) -> None:
-    """Gate on vault + permission, then render the focused add form.
+    """Gate on permission, then render the focused add form.
 
-    Two early-exit paths:
-      1. Non-editor: polite "view-only" message.
-      2. Editor but vault locked: deep-link to Settings → Vault.
-    Neither exposes CREDS-bundle mechanics in this tab.
+    Credentials are written directly to per-app GitHub secrets on
+    submit, so there's no vault step or bundle paste here anymore.
     """
     if not roles.can(principal, "add_app"):
         show_info(
             "You have view-only access.",
             hint="Ask a super admin to grant you the **editor** role in the "
                  "Users tab so you can onboard new apps.",
-        )
-        return
-
-    if not st.session_state.get("_creds_cache"):
-        show_info(
-            "Set up the credential vault before adding apps.",
-            hint=(
-                "Open the **Settings** tab → **Credential vault** section → "
-                "paste the current CREDS bundle once. The vault stays "
-                "unlocked for this browser session, so you only do it once "
-                "per login."
-            ),
         )
         return
 
@@ -810,219 +769,8 @@ def _render_settings_tab(principal: roles.UserPrincipal) -> None:
         )
         return
 
-    st.subheader("🔑 Credential vault")
-    st.caption(
-        "One-time per session: paste the current `CREDS` GitHub secret so "
-        "the UI can append new app credentials without overwriting the "
-        "existing ones. GitHub's API doesn't allow reading secrets back, "
-        "hence the paste."
-    )
-    _render_vault_section(principal)
-
-    st.divider()
-
     st.subheader("⏱ Scrape schedule")
     _render_schedule_section(principal)
-
-
-# =================================================================
-# Credential vault UI + parser
-# =================================================================
-# Matches gh.parse_dotenv's grammar but ALSO records per-line errors
-# so the UI can point the user at the exact broken line.
-_DOTENV_LINE_RE = re.compile(
-    r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$"
-)
-
-
-def _parse_creds_with_errors(text: str) -> dict:
-    """Parse a CREDS body into {'valid': {KEY: value}, 'issues': [...]}.
-
-    Blank lines and `#` comments are ignored silently (same as the
-    GitHub Actions workflow's parser). Everything else must match
-    KEY=value or it's surfaced as a numbered issue.
-    """
-    valid: dict[str, str] = {}
-    issues: list[dict] = []
-    for idx, raw in enumerate(text.splitlines(), start=1):
-        line = raw.rstrip("\r")
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        m = _DOTENV_LINE_RE.match(line)
-        if not m:
-            issues.append({
-                "line": idx,
-                "content": line,
-                "reason": "not a KEY=value line",
-            })
-            continue
-        k, v = m.group(1), m.group(2)
-        if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
-            v = v[1:-1]
-        valid[k] = v
-    return {"valid": valid, "issues": issues}
-
-
-def _group_creds_by_app(valid: dict) -> dict[str, list[str]]:
-    """Collapse APP_N_USER/APP_N_PASS pairs back to their APP_N root.
-    Anything that doesn't match that shape lands in the special
-    `_extras` bucket (LOGIN_URL, HEADLESS, etc.)."""
-    out: dict[str, list[str]] = {}
-    for key in valid:
-        m = re.match(r"^(APP_\d+)_(USER|PASS)$", key)
-        if m:
-            out.setdefault(m.group(1), []).append(m.group(2))
-        else:
-            out.setdefault("_extras", []).append(key)
-    return out
-
-
-def _vault_missing_apps_for(creds_body: str) -> list[str]:
-    """Return a list of registered-app IDs whose USER/PASS pair is NOT
-    fully present in `creds_body`. Empty list == safe to commit.
-
-    Used by both the vault live-preview (warning) and _commit_new_app
-    (hard block). Prevents the "paste partial CREDS → put overwrites
-    GitHub secret → existing apps lose creds" data-loss path.
-    """
-    parsed = _parse_creds_with_errors(creds_body or "")
-    apps_map = _group_creds_by_app(parsed["valid"])
-    missing: list[str] = []
-    for app in app_registry.all_apps():
-        if not app.creds_ref:
-            continue
-        have = set(apps_map.get(app.creds_ref, []))
-        if have != {"USER", "PASS"}:
-            missing.append(app.id)
-    return missing
-
-
-def _render_vault_section(principal: roles.UserPrincipal) -> None:
-    """Show vault status + an inline paste editor with live validation."""
-    cached = st.session_state.get("_creds_cache", "")
-    editor_mode = st.session_state.get("_show_vault_editor", False) or not cached
-
-    if not editor_mode:
-        # Locked+cached state — just show a green status card + actions.
-        parsed = _parse_creds_with_errors(cached)
-        apps_map = _group_creds_by_app(parsed["valid"])
-        app_count = sum(1 for k in apps_map if k != "_extras")
-        st.success(
-            f"🔓 **Vault unlocked** — {app_count} app(s), "
-            f"{len(parsed['valid'])} total entries cached for this session."
-        )
-        with st.expander("View cached keys (names only, values hidden)"):
-            for app_ref in sorted(apps_map.keys()):
-                if app_ref == "_extras":
-                    continue
-                pair = sorted(apps_map[app_ref])
-                st.write(f"- **{app_ref}**: {', '.join(pair)}")
-            extras = apps_map.get("_extras", [])
-            if extras:
-                st.write(f"- **Other**: {', '.join(sorted(extras))}")
-
-        c1, c2, _ = st.columns([1, 1, 3])
-        with c1:
-            if st.button("Replace bundle", help="Paste a new CREDS body."):
-                st.session_state["_show_vault_editor"] = True
-                st.rerun()
-        with c2:
-            if st.button("Lock vault", help="Clears the cached CREDS body."):
-                st.session_state.pop("_creds_cache", None)
-                st.session_state.pop("_show_vault_editor", None)
-                st.rerun()
-        return
-
-    # Editor mode — the text area lives OUTSIDE an st.form so we can
-    # show live validation as the user types (forms only update values
-    # on submit).
-    body = st.text_area(
-        "Paste the current CREDS bundle",
-        value=cached,
-        height=220,
-        placeholder="APP_1_USER=ops@cedcommerce.com\nAPP_1_PASS=...\n"
-                    "APP_2_USER=...\nAPP_2_PASS=...\nLOGIN_URL=https://...",
-        help="Copy from the GitHub repo → Settings → Secrets and variables "
-             "→ Actions → CREDS (you can only see it when creating/updating it).",
-        key="_vault_body_input",
-    )
-
-    # Live inline feedback — re-parses on every keystroke rerun.
-    if body.strip():
-        preview = _parse_creds_with_errors(body)
-        valid = preview["valid"]
-        issues = preview["issues"]
-        if issues:
-            shown = issues[:5]
-            extra = len(issues) - len(shown)
-            bullets = "\n\n".join(
-                f"• **Line {i['line']}:** `{i['content'][:60]}` — {i['reason']}"
-                for i in shown
-            )
-            if extra > 0:
-                bullets += f"\n\n• _(+ {extra} more — fix the first ones and re-check)_"
-            show_warning("Some lines don't look valid.", hint=bullets)
-        elif not valid:
-            show_info(
-                "Waiting for at least one valid `KEY=value` line…",
-                hint="Comments (`#`) and blank lines are fine.",
-            )
-        else:
-            apps_map = _group_creds_by_app(valid)
-            app_count = sum(1 for k in apps_map if k != "_extras")
-            pieces = [f"**{app_count} app(s)**", f"{len(valid)} entries"]
-            if apps_map.get("_extras"):
-                pieces.append(f"{len(apps_map['_extras'])} extras")
-
-            # Cross-check against apps.yaml: every registered app needs
-            # both USER and PASS in this paste. Missing ones would get
-            # wiped on the next put, so warn loudly.
-            missing = _vault_missing_apps_for(body)
-            if missing:
-                show_warning(
-                    "⚠️ This paste is missing credentials for already-"
-                    "registered app(s). Unlocking and then adding a new app "
-                    "would **overwrite the GitHub `CREDS` secret** and drop "
-                    "these apps' credentials:",
-                    hint=(
-                        "\n".join(f"• `{m}`" for m in missing)
-                        + "\n\nCopy the full current CREDS body from GitHub "
-                        "(Settings → Secrets → edit `CREDS` to re-view) and "
-                        "include ALL `APP_*_USER` / `APP_*_PASS` lines before "
-                        "unlocking."
-                    ),
-                )
-            else:
-                st.success(
-                    "✅ Looks good — " + ", ".join(pieces) + ". "
-                    "Coverage matches every app in `apps.yaml`. "
-                    "Click **Unlock vault** below to cache."
-                )
-
-    c1, c2, _ = st.columns([1, 1, 3])
-    with c1:
-        if st.button("Unlock vault", type="primary", key="vault_unlock"):
-            if not body.strip():
-                show_warning("Paste a CREDS bundle first.")
-                return
-            preview = _parse_creds_with_errors(body)
-            if preview["issues"]:
-                show_warning(
-                    f"Fix the {len(preview['issues'])} invalid line(s) before "
-                    "unlocking — the live preview above shows which."
-                )
-                return
-            if not preview["valid"]:
-                show_warning("No valid `KEY=value` lines found.")
-                return
-            st.session_state["_creds_cache"] = body
-            st.session_state.pop("_show_vault_editor", None)
-            st.rerun()
-    with c2:
-        if cached and st.button("Cancel", key="vault_cancel"):
-            st.session_state.pop("_show_vault_editor", None)
-            st.rerun()
 
 
 # =================================================================
