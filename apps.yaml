@@ -67,3 +67,13 @@ apps:
   added_at: '2026-04-24T14:26:40+00:00'
   schema_status: pending_review
   notes: ''
+- id: global_mcf
+  label: Global MCF
+  dropdown_value: global_mcf
+  scrape_installs: true
+  scrape_uninstalls: true
+  creds_ref: APP_8
+  added_by: hsrivastava@threecolts.com
+  added_at: '2026-04-24T14:41:49+00:00'
+  schema_status: pending_review
+  notes: ''
