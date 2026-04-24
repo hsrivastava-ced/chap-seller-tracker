@@ -165,24 +165,29 @@ def _render_apps_tab(principal: roles.UserPrincipal):
     if not apps:
         st.info("No apps configured yet. Fill in the form below to add the first one.")
     else:
+        # Status emoji (no Streamlit color-tag markdown — st.dataframe
+        # renders cell content as plain text, so `:green[...]` would show
+        # literally). Also dropped the "Creds" column: it was checking
+        # os.getenv(APP_N_USER) which only exists inside the GitHub
+        # Actions runner — from Streamlit Cloud it ALWAYS reported
+        # "missing", which was misleading rather than informative.
+        status_label = {
+            "canonical": "🟢 canonical",
+            "pending_review": "🟡 pending review",
+            "blocked": "🔴 blocked",
+        }
         rows = []
         for a in apps:
-            badge = {
-                "canonical": ":green[canonical]",
-                "pending_review": ":orange[pending review]",
-                "blocked": ":red[blocked]",
-            }.get(a.schema_status, a.schema_status)
-            installs = "✅" if a.scrape_installs else "—"
-            uninstalls = "✅" if a.scrape_uninstalls else "—"
-            creds_present = "✅" if a.is_ready_to_scrape else "⚠️ missing"
             rows.append({
-                "App": f"**{a.label}**  \n`{a.id}`",
-                "Status": badge,
-                "Installs": installs,
-                "Uninstalls": uninstalls,
-                "Creds": creds_present,
-                "Added by": a.added_by or "—",
-                "Added at": a.added_at or "—",
+                "App": a.label,
+                "Id": a.id,
+                "Status": status_label.get(a.schema_status, a.schema_status),
+                "Installs": "✅" if a.scrape_installs else "—",
+                "Uninstalls": "✅" if a.scrape_uninstalls else "—",
+                # Short handle instead of full email for readability.
+                "Added by": (a.added_by or "—").split("@")[0],
+                # Just the date portion — full timestamp is overkill here.
+                "Added": (a.added_at or "—")[:10],
             })
         st.dataframe(rows, hide_index=True, use_container_width=True)
 
@@ -234,7 +239,11 @@ def _render_add_app_wizard(principal: roles.UserPrincipal):
             "of the form). The app remembers it for later adds in the same session."
         )
 
-    with st.form("add_app_form", clear_on_submit=False):
+    # clear_on_submit=True resets the form fields after a successful add so
+    # that a double-click can't silently re-submit stale values against a
+    # different dropdown pick. The CREDS textarea still reappears with its
+    # cached value on the next render (we re-key it off session_state).
+    with st.form("add_app_form", clear_on_submit=True):
         # --- App selection -----------------------------------------------
         labels = [f"{a['label']} — {a['value']}" for a in available]
         picked_idx = st.selectbox(
