@@ -1,0 +1,47 @@
+# apps.yaml — registry of admin-panel sources to scrape.
+#
+# This replaces the hard-coded APP_IDS / CREDENTIALS dicts in the old
+# config.py. Each scheduled scrape iterates every entry whose
+# schema_status is `canonical` (or `pending_review` if explicitly opted
+# in by a super admin via the admin UI).
+#
+# Add new entries via the Streamlit admin UI at /admin. The UI will:
+#   1. append APP_N_USER / APP_N_PASS to the CREDS GitHub secret
+#   2. add the new app here
+#   3. run a dry scrape to check schema drift
+#
+# You CAN hand-edit this file for emergencies, but the UI is the
+# intended path — it keeps the CREDS secret in sync.
+
+schema_version: 1
+
+apps:
+  - id: shopify_temu
+    label: "TEMU US (Shopify)"
+    dropdown_value: "shopify_temu"
+    scrape_installs: true
+    scrape_uninstalls: true
+    creds_ref: APP_1
+    added_by: hsrivastava@threecolts.com
+    added_at: 2026-04-17T00:00:00Z
+    schema_status: canonical
+
+  - id: shein
+    label: "SHEIN"
+    dropdown_value: "shein"
+    scrape_installs: true
+    scrape_uninstalls: true
+    creds_ref: APP_2
+    added_by: hsrivastava@threecolts.com
+    added_at: 2026-04-17T00:00:00Z
+    schema_status: canonical
+
+  - id: shopify_temu_eu
+    label: "TEMU EU (Shopify)"
+    dropdown_value: "shopify_temu_eu"
+    scrape_installs: true
+    scrape_uninstalls: true
+    creds_ref: APP_3
+    added_by: hsrivastava@threecolts.com
+    added_at: 2026-04-17T00:00:00Z
+    schema_status: canonical

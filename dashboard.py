@@ -34,6 +34,8 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 
+import auth
+import roles
 from analytics_advanced import (
     DISPLAY_NAMES,
     build_stakeholder_report,
@@ -1661,6 +1663,21 @@ def _growth_tables_panel(
 # ---------------------------------------------------------------------
 
 def main() -> None:
+    # ------------------------------------------------------------
+    # Auth gate — must run BEFORE st.set_page_config, because the
+    # login-prompt path inside auth.gate() calls set_page_config
+    # itself. If the user is already signed in, gate() returns a
+    # UserPrincipal and we proceed to configure the main dashboard
+    # page layout below.
+    #
+    # Access rules (see MULTI_APP_DESIGN.md §4):
+    #   - any @threecolts.com user can view the dashboard
+    #   - editors get a "Go to Admin" link in the sidebar
+    #   - super admins additionally see the Users tab inside Admin
+    # ------------------------------------------------------------
+    principal = auth.gate()
+    auth.require("view_dashboard", principal)
+
     st.set_page_config(
         page_title="cHAP Seller Tracker",
         page_icon="📊",
@@ -1668,6 +1685,16 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
     _inject_css()
+
+    # Sidebar: identity + (if allowed) link to admin.
+    auth.sign_out_button(st)
+    if roles.can(principal, "see_admin_tab"):
+        with st.sidebar:
+            st.page_link(
+                "admin_ui.py",
+                label="⚙ Admin panel",
+                help="Add new scraper sources and (super admin) manage users.",
+            )
 
     stamps = _list_run_stamps()
     if not stamps:

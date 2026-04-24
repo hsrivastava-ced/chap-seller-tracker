@@ -14,8 +14,26 @@ httpx[socks]>=0.27.0
 # backs the Install Trend / Installs-vs-Uninstalls / stacked-bar charts
 # introduced in the Apr 2026 redesign (see project_chap_dashboard_redesign
 # memory note).
-streamlit>=1.36.0,<2.0.0
+#
+# Bumped to 1.42+ for native st.login() (Google OIDC) used by auth.py.
+# See MULTI_APP_DESIGN.md §3.3 for the [auth] secrets block.
+streamlit>=1.42.0,<2.0.0
 plotly>=5.20.0,<7.0.0
+
+# Multi-app + RBAC (Apr 2026).
+# - pyyaml: reads apps.yaml / roles.yaml
+# - pynacl: libsodium-encrypts the CREDS secret before PUTting it via
+#   the GitHub REST API from the admin UI
+# - requests: GitHub REST API calls from admin UI + streamlit-oauth
+#   fallback. Already pulled in transitively by other deps but pinned
+#   here so admin_ui / github_secret_updater don't break silently.
+# - streamlit-oauth: fallback OAuth path for when native st.login()
+#   isn't available (e.g. self-hosted Streamlit below 1.42). Harmless
+#   if unused.
+pyyaml>=6.0,<7.0
+pynacl>=1.5.0,<2.0.0
+requests>=2.31.0,<3.0.0
+streamlit-oauth>=0.1.14,<1.0.0
 
 # Dev dependencies — not imported by the runtime pipeline. Uncomment
 # when setting up a contributor venv:

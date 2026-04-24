@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "description": "Column lists the unified analytics layer expects. A newly-onboarded app whose columns deviate from these lists is fenced off (schema_status=pending_review) until a super admin approves. Updated from the 2026-04-23_15-56-27Z run of the 3 canonical apps.",
+  "kinds": {
+    "sellers": {
+      "required_columns": [
+        "seller_id",
+        "store_url",
+        "email",
+        "username",
+        "platforms",
+        "installed_on"
+      ],
+      "optional_columns": [
+        "action",
+        "app_type",
+        "failed_order_count",
+        "last_sync",
+        "order_count",
+        "plan",
+        "product_count",
+        "source_country",
+        "steps_completed",
+        "webhooks"
+      ]
+    },
+    "uninstalls": {
+      "required_columns": [
+        "seller_id",
+        "email",
+        "username",
+        "platform",
+        "uninstalled_on"
+      ],
+      "optional_columns": [
+        "shops_raw"
+      ]
+    }
+  }
+}
