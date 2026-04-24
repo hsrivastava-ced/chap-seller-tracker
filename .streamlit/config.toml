@@ -1,0 +1,28 @@
+# cHAP Seller Tracker — global Streamlit theme.
+#
+# Keeps both dashboard.py and pages/Admin.py on the same visual
+# language. Before this file existed the sidebar was forced dark
+# via CSS injection but the main content respected Streamlit's
+# auto dark/light, so the sidebar "didn't match" the page.
+# Pinning a single theme removes that dissonance.
+#
+# Palette derived from dashboard.py's PALETTE dict — the canonical
+# source of truth. If that dict changes, update these values too.
+
+[theme]
+# Primary interactive color (buttons, focus rings, active tab underline).
+primaryColor = "#6366f1"
+
+# Page background + "cards" / expanders.
+backgroundColor = "#ffffff"
+secondaryBackgroundColor = "#f3f4f6"
+
+# Body text.
+textColor = "#0f172a"
+
+# Sans-serif stack — matches Streamlit's default, pinned here so it
+# can't get swapped out by a future upstream change.
+font = "sans-serif"
+
+[browser]
+gatherUsageStats = false

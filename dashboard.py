@@ -37,6 +37,7 @@ import streamlit as st
 import auth
 import roles
 from ui_errors import wrap_page
+from ui_theme import apply_shared_theme
 from analytics_advanced import (
     DISPLAY_NAMES,
     build_stakeholder_report,
@@ -754,14 +755,26 @@ def _render_sidebar(
     stamps: list[str],
     available_years: list[int],
     available_periods: list[str],
-) -> tuple[str, int | None, str | None, str]:
-    """Returns (app_key, year_or_None, month_key_or_None, run_stamp).
+    available_apps: list[str],
+) -> tuple[list[str], str, int | None, str | None, str]:
+    """Returns (selected_apps, app_key_for_legacy_charts, year, month, run_stamp).
 
-    `month_key_or_None` is a 'YYYY-MM' string when the user picks a
-    specific month, else None. Per stakeholder feedback ('Need option
-    to choose month here also Where you have app and year'), we now
-    have three filters. Month choices are constrained to periods that
-    actually exist in the data — no dead options.
+    selected_apps: list of real app_ids the user picked (never includes
+    "all_apps" — that pseudo-key is an internal aggregation label).
+    Default is every configured app selected.
+
+    app_key_for_legacy_charts: a single app_id string still expected by
+    KPI cards + per-app panels that haven't been refactored to accept a
+    list. Derivation rule:
+      - exactly 1 selected   → that app's id
+      - all real apps selected → "all_apps" (use the pre-aggregated view)
+      - partial (2+ but not all) → "all_apps" with a caption noting that
+        detailed KPIs still aggregate across every configured app while
+        the trend charts already honor the selection per-series.
+
+    This keeps the sidebar contract simple (it returns a legacy key the
+    existing callers understand) while giving the user true multi-pick
+    control for the charts that already render per-app series.
     """
     with st.sidebar:
         st.markdown(
@@ -774,14 +787,34 @@ def _render_sidebar(
         st.markdown('<div class="sidebar-section">Filters</div>',
                     unsafe_allow_html=True)
 
-        app_labels = [DISPLAY_NAMES[k] for k in APP_KEYS]
-        app_label = st.selectbox(
-            "App",
-            app_labels,
-            index=0,
-            help="Pick a single marketplace or All Apps for the combined view.",
+        # Multi-select across every configured app. No more "All Apps"
+        # pseudo-option — the user explicitly picks which apps to include.
+        # Default: everything selected (that matches the prior
+        # "All Apps" default without confusing naming).
+        selected_apps = st.multiselect(
+            "Apps",
+            options=available_apps,
+            default=available_apps,
+            format_func=display_name,
+            help=(
+                "Pick one or more apps to focus on. Leaving all selected "
+                "shows the combined view; deselecting narrows scope to "
+                "the apps you leave checked."
+            ),
         )
-        app_key = next(k for k, v in DISPLAY_NAMES.items() if v == app_label)
+        if not selected_apps:
+            # Empty selection is unusable — silently fall back to all.
+            selected_apps = list(available_apps)
+
+        # Legacy key for KPI cards + single-app panels that still take
+        # one `app_key: str`. All-selected → "all_apps" (pre-aggregated).
+        # Single → that app's id. Partial (2+ but not all) → "all_apps"
+        # for now, with a note. A later pass can compute true partial
+        # aggregates on the fly.
+        if len(selected_apps) == 1:
+            app_key = selected_apps[0]
+        else:
+            app_key = "all_apps"
 
         year_choices = ["All years"] + [str(y) for y in available_years]
         year_label = st.selectbox(
@@ -837,7 +870,7 @@ def _render_sidebar(
             unsafe_allow_html=True,
         )
 
-        return app_key, year, month_key, stamp
+        return selected_apps, app_key, year, month_key, stamp
 
 
 # ---------------------------------------------------------------------
@@ -1080,21 +1113,28 @@ def _kpi_row(
     )
 
 
-def _trend_panels(stake: dict, app_key: str, month_key: str | None = None) -> None:
+def _trend_panels(
+    stake: dict,
+    app_key: str,
+    month_key: str | None = None,
+    selected_apps: list[str] | None = None,
+) -> None:
     """Two side-by-side panels: Installs trend line + Installs/Uninstalls bars.
     Matches the reference 'Revenue Trend' + 'Installs vs Uninstalls' duo.
 
-    When `month_key` is set, that month's bars are drawn in the deeper /
-    saturated shade on the Installs-vs-Uninstalls chart so the month filter
-    is *visibly* represented on the chart — not just in the KPI cards.
-    The full time series still renders so stakeholders can eyeball how
-    the highlighted month compares to its neighbors.
+    `selected_apps` (new): the explicit list of apps the user picked in
+    the sidebar multiselect. Drives which lines render on the trend
+    chart — one series per selected app. When None (legacy callers)
+    falls back to the old behavior (derive from app_key).
     """
-    apps_for_lines = (
-        [a for a in APP_KEYS if a != "all_apps"]
-        if app_key == "all_apps"
-        else [app_key]
-    )
+    if selected_apps:
+        apps_for_lines = [a for a in selected_apps if a != "all_apps"]
+    else:
+        apps_for_lines = (
+            [a for a in APP_KEYS if a != "all_apps"]
+            if app_key == "all_apps"
+            else [app_key]
+        )
     # Decide which monthly series to render on the right-hand (bar) chart.
     # 'All Apps' view shows the combined total so stakeholders see the
     # whole picture; a single-app view shows just that app.
@@ -1704,6 +1744,7 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
+    apply_shared_theme()  # shared sidebar / button look across pages
     _inject_css()
 
     # Sidebar: identity + (if allowed) link to admin.
@@ -1751,11 +1792,38 @@ def main() -> None:
     )
     available_periods = stake_full["monthly"].get("periods", [])
 
-    app_key, year, month_key, stamp = _render_sidebar(
+    # Which apps the data actually has — sidebar multiselect is sourced
+    # from this so we never offer apps the dataset doesn't include.
+    available_apps = [
+        a for a in APP_KEYS
+        if a != "all_apps" and (
+            (sellers_by_app or {}).get(a) or (unins_by_app or {}).get(a)
+        )
+    ]
+    if not available_apps:
+        # First-ever run or empty dataset — fall back to the registry
+        # order so the multiselect isn't empty.
+        available_apps = [a for a in APP_KEYS if a != "all_apps"]
+
+    selected_apps, app_key, year, month_key, stamp = _render_sidebar(
         stamps=stamps,
         available_years=available_years,
         available_periods=available_periods,
+        available_apps=available_apps,
     )
+
+    # If the user narrowed the app selection but didn't reduce to a
+    # single app, the legacy KPI pipeline still aggregates across every
+    # configured app (see _render_sidebar docstring). Let them know
+    # upfront so the data isn't misleading.
+    if 1 < len(selected_apps) < len(available_apps):
+        picked = ", ".join(display_name(a) for a in selected_apps)
+        st.info(
+            f"Showing **{picked}**. Trend charts render one line per "
+            f"selected app. Aggregate KPI cards and growth tables still "
+            f"sum across every configured app — true partial-selection "
+            f"aggregates are coming in a follow-up."
+        )
 
     # Apply year filter — installs by installed_on, uninstalls by
     # uninstalled_on — for the "demographic" report. Growth tables and
@@ -1786,7 +1854,7 @@ def main() -> None:
     # Passing month_key lets the Installs vs Uninstalls bars highlight the
     # selected month so the sidebar filter is visibly reflected on the chart
     # (user flagged the filter 'does nothing' when only KPIs updated).
-    _trend_panels(stake, app_key, month_key=month_key)
+    _trend_panels(stake, app_key, month_key=month_key, selected_apps=selected_apps)
 
     # ------------ Paid vs Not Paid ------------
     _paid_panel(stake, app_key)

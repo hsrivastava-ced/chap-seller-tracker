@@ -46,6 +46,7 @@ import github_secret_updater as gh
 import roles
 from app_registry import AppEntry
 from ui_errors import show_error, show_warning, show_info, wrap_page
+from ui_theme import apply_shared_theme
 
 
 # =================================================================
@@ -144,6 +145,7 @@ def main():
     auth.require("see_admin_tab", principal)
 
     st.set_page_config(page_title="Admin — cHAP Seller Tracker", page_icon=":gear:", layout="wide")
+    apply_shared_theme()  # same sidebar / button look as Dashboard
     auth.sign_out_button(st)
 
     st.title("Admin")
