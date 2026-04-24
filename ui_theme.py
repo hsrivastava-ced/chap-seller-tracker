@@ -96,6 +96,20 @@ section[data-testid="stSidebar"] [data-baseweb="tag"] {{
 section[data-testid="stSidebar"] [data-baseweb="select"] svg {{
     fill: #cbd5e1 !important;
 }}
+/* Multiselect tag pills — Streamlit + BaseWeb relied on inline
+   horizontal padding that our blanket overrides stripped away,
+   clipping the first character ("TEMU US" appeared as "EMU US"
+   in the user's screenshot). Restore explicit padding + a sane
+   font size so the label breathes. */
+section[data-testid="stSidebar"] [data-baseweb="tag"] {{
+    padding: 4px 10px !important;
+    font-size: 0.85rem !important;
+    line-height: 1.2 !important;
+}}
+section[data-testid="stSidebar"] [data-baseweb="tag"] span {{
+    padding: 0 !important;
+    font-size: 0.85rem !important;
+}}
 
 /* Sidebar SECONDARY buttons (Sign out, etc.) — default Streamlit
    renders them with light gray background + dark text. On our dark
