@@ -101,23 +101,122 @@ def days_since_install(val, *, today: Optional[date] = None) -> Optional[int]:
 
 def _enrich(row: dict, *, today: Optional[date] = None) -> dict:
     """Return a shallow-copied row with an `_insight` dict summarising
-    the numeric/boolean signals the buckets use. Keeps the original
-    row unchanged for callers that still need raw strings.
+    the numeric/boolean signals the buckets use + the unified fit
+    score and its temperature tier. Keeps the original row unchanged
+    for callers that still need raw strings.
     """
     plan = (row.get("plan") or "").strip()
+    order_count = _num(row.get("order_count"))
+    product_count = _num(row.get("product_count"))
+    failed_orders = _num(row.get("failed_order_count"))
+    steps = _num(row.get("steps_completed"))
+    days = days_since_install(row.get("installed_on"), today=today)
+    paid = is_paid(plan)
+    score = _fit_score(
+        paid=paid,
+        days_since_install=days,
+        product_count=product_count,
+        order_count=order_count,
+        failed_orders=failed_orders,
+        steps_completed=steps,
+    )
     out = dict(row)
     out["_insight"] = {
         "plan": plan,
-        "paid": is_paid(plan),
-        "order_count": _num(row.get("order_count")),
-        "product_count": _num(row.get("product_count")),
-        "failed_order_count": _num(row.get("failed_order_count")),
-        "steps_completed": _num(row.get("steps_completed")),
-        "days_since_install": days_since_install(
-            row.get("installed_on"), today=today
-        ),
+        "paid": paid,
+        "order_count": order_count,
+        "product_count": product_count,
+        "failed_order_count": failed_orders,
+        "steps_completed": steps,
+        "days_since_install": days,
+        "fit_score": score,
+        "temperature": temperature_for(score),
     }
     return out
+
+
+# ---------------------------------------------------------------------
+# Fit score + temperature — quantified priority so reps can sort one
+# unified list instead of eyeballing across 5 buckets.
+# ---------------------------------------------------------------------
+
+def _fit_score(
+    *,
+    paid: bool,
+    days_since_install: Optional[int],
+    product_count: int,
+    order_count: int,
+    failed_orders: int,
+    steps_completed: int,
+) -> int:
+    """0-100 blended score combining the same signals the buckets use.
+
+    Two profiles: conversion (for free sellers → "worth talking to")
+    and upsell (for paid sellers → "ready for a bigger plan"). Caller
+    doesn't pick which one — the function reads `paid` and does the
+    right thing.
+
+    Conversion profile weights (free plan):
+      days_since_install → up to 35 points (longer = more committed)
+      product_count     → up to 30 points (catalog = investment)
+      order_count       → up to 30 points (already earning)
+      steps_completed   → up to 5 points  (setup progress)
+
+    Upsell profile weights (paid plan):
+      base for being paid → 30 points
+      order_count        → up to 50 points (volume drives upsell)
+      product_count      → up to 20 points
+      penalty if failure_ratio > 10% → −15
+
+    Score is clamped to [0, 100].
+    """
+    days = days_since_install or 0
+    if not paid:
+        score = 0.0
+        score += min(35.0, days / 4.3)         # ~150 days caps this
+        score += min(30.0, product_count / 20.0)
+        score += min(30.0, order_count * 2.0)  # 15 orders → max
+        score += min(5.0, steps_completed * 1.0)
+    else:
+        score = 30.0
+        score += min(50.0, order_count / 10.0)
+        score += min(20.0, product_count / 50.0)
+        if order_count > 0 and failed_orders / order_count > 0.1:
+            score -= 15.0
+    return max(0, min(100, round(score)))
+
+
+# Tier thresholds — tuned so a realistic seller distribution spreads
+# across all four buckets rather than everyone landing in "Low". Mirrors
+# the Hot/Warm/Cool/Low palette from the reference dashboard.
+TIER_HOT_MIN = 75
+TIER_WARM_MIN = 50
+TIER_COOL_MIN = 25
+
+
+def temperature_for(score: int) -> str:
+    """Map a fit score to one of Hot / Warm / Cool / Low."""
+    if score >= TIER_HOT_MIN:
+        return "Hot"
+    if score >= TIER_WARM_MIN:
+        return "Warm"
+    if score >= TIER_COOL_MIN:
+        return "Cool"
+    return "Low"
+
+
+def temperature_emoji(tier: str) -> str:
+    return {"Hot": "🔥", "Warm": "☀", "Cool": "❄", "Low": "💤"}.get(tier, "")
+
+
+def tier_counts(sellers: Iterable[dict], *, today: Optional[date] = None) -> dict[str, int]:
+    """Total sellers in each temperature tier — powers the summary
+    counter strip at the top of the page."""
+    counts = {"Hot": 0, "Warm": 0, "Cool": 0, "Low": 0}
+    for r in sellers or []:
+        enriched = _enrich(r, today=today)
+        counts[enriched["_insight"]["temperature"]] += 1
+    return counts
 
 
 # ---------------------------------------------------------------------

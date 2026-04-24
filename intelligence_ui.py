@@ -23,12 +23,14 @@ import streamlit as st
 import auth
 import roles
 import customer_intelligence as ci
+import seller_profile_enricher as spe
 from analytics_advanced import (
     DISPLAY_NAMES,
     display_name,
     exclude_test_stores,
 )
 from normalize import normalize_run_data
+from supabase_client import SupabaseClient
 from ui_errors import wrap_page
 from ui_theme import apply_shared_theme
 
@@ -75,18 +77,41 @@ _PRIMARY_COLS = [
 
 
 def _table_from_rows(rows: list[dict]) -> pd.DataFrame:
-    """Build a DataFrame from enriched seller rows, picking the columns
-    reps actually scan. `_insight` sub-dicts are expanded to visible
-    `days_since_install` / `failure_ratio` columns where relevant."""
+    """Build a rep-facing DataFrame. Prefixes two derived columns so
+    fit score + priority are the first things the eye lands on, then
+    the identity + usage fields."""
     records: list[dict] = []
     for r in rows:
-        rec = {c: r.get(c, "") for c in _PRIMARY_COLS}
         ins = r.get("_insight", {})
+        tier = ins.get("temperature", "Low")
+        rec = {
+            "Priority": f"{ci.temperature_emoji(tier)} {tier}",
+            "Fit": f"{ins.get('fit_score', 0)}",
+        }
+        for c in _PRIMARY_COLS:
+            rec[c] = r.get(c, "")
         rec["days_installed"] = ins.get("days_since_install") or "—"
         if "failure_ratio" in ins:
             rec["failure_ratio"] = f"{ins['failure_ratio'] * 100:.1f}%"
         records.append(rec)
     return pd.DataFrame.from_records(records)
+
+
+def _tier_counter_card(label: str, count: int, color: str, emoji: str) -> str:
+    """Compact counter card — mirrors the Hot/Warm/Cool/Low strip from
+    the reference dashboard. Uses the dashboard palette values so the
+    two pages look like one product."""
+    return (
+        f'<div style="padding:14px 18px; background:#1e293b; '
+        f'border-radius:10px; border:1px solid #334155;">'
+        f'<div style="color:#94a3b8; font-size:0.78rem; font-weight:600; '
+        f'letter-spacing:0.06em; text-transform:uppercase;">'
+        f'{emoji} {label}</div>'
+        f'<div style="color:{color}; font-size:1.9rem; font-weight:700; '
+        f'line-height:1.1; margin-top:6px; font-variant-numeric:tabular-nums;">'
+        f'{count:,}</div>'
+        f'</div>'
+    )
 
 
 def _download_csv(df: pd.DataFrame, filename: str) -> None:
@@ -195,6 +220,30 @@ def main() -> None:
     )
 
     today = date.today()
+
+    # ---- Temperature counter strip (🔥 Hot / ☀ Warm / ❄ Cool / 💤 Low).
+    # Same shape as the reference dashboard the user shared — instant
+    # read on pipeline composition before scrolling into bucket tables.
+    tiers = ci.tier_counts(sellers, today=today)
+    c1, c2, c3, c4 = st.columns(4)
+    c1.markdown(
+        _tier_counter_card("Hot", tiers["Hot"], "#ef4444", "🔥"),
+        unsafe_allow_html=True,
+    )
+    c2.markdown(
+        _tier_counter_card("Warm", tiers["Warm"], "#f59e0b", "☀"),
+        unsafe_allow_html=True,
+    )
+    c3.markdown(
+        _tier_counter_card("Cool", tiers["Cool"], "#3b82f6", "❄"),
+        unsafe_allow_html=True,
+    )
+    c4.markdown(
+        _tier_counter_card("Low", tiers["Low"], "#94a3b8", "💤"),
+        unsafe_allow_html=True,
+    )
+    st.write("")  # spacing before the buckets
+
     buckets = ci.buckets_for(sellers, today=today)
 
     if not buckets:
@@ -205,7 +254,9 @@ def main() -> None:
         )
         return
 
-    # Summary strip: how many leads are in each bucket.
+    # Summary strip: bucket-level counts. Temperature tiers above
+    # already show the big picture — this zooms in on actionable
+    # groupings for reps who want to jump straight to the relevant tab.
     counts = " · ".join(
         f"{b.title} · **{b.count}**" for b in buckets if b.count > 0
     )
@@ -244,6 +295,16 @@ def main() -> None:
                 f"intel_{bucket.id}_{app_key}_{run_stamp}.csv",
             )
 
+            # ---- AI business analysis (per lead) ------------------
+            # Drilldown: pick a shop from this bucket → Claude analyses
+            # the storefront → we cache it + show business type,
+            # categories, positioning, pitch opening.
+            _render_analyse_block(
+                bucket_rows=bucket.rows,
+                bucket_id=bucket.id,
+                app_key=app_key,
+            )
+
     if inactive:
         with st.expander(
             f"Empty buckets ({len(inactive)}) — no one fits here right now",
@@ -257,8 +318,130 @@ def main() -> None:
     st.divider()
     st.caption(
         "Coming next: day-over-day delta (what changed since the last "
-        "scrape — new installs, plan changes, failed-order spikes); "
+        "scrape — new installs, plan changes, failed-order spikes), "
         "pulled directly from Supabase snapshots so nothing is lost "
-        "when the admin panel drops a seller. AI-augmented outreach "
-        "recommendations per lead are also in the pipeline."
+        "when the admin panel drops a seller."
+    )
+
+
+# ---------------------------------------------------------------------
+# AI business analysis — per-lead drilldown under each bucket.
+# ---------------------------------------------------------------------
+
+
+def _render_analyse_block(
+    *, bucket_rows: list[dict], bucket_id: str, app_key: str,
+) -> None:
+    """Pick-a-shop + 🔍 Analyse business panel.
+
+    Hits seller_profile_enricher, which:
+      - returns from Supabase cache (public.seller_profiles) when
+        recent enough,
+      - else fetches the seller's storefront + asks Claude for
+        business_type / categories / insight / opportunity,
+      - else runs in dry-run mode (no ANTHROPIC_API_KEY set) so the
+        UI still explains what the user should do.
+
+    All network + Claude work is best-effort — errors surface inline,
+    never block the rest of the page.
+    """
+    if not bucket_rows:
+        return
+
+    st.markdown("**🔍 Analyse a shop's business**")
+    st.caption(
+        "Pick a row above and we'll read the seller's public storefront, "
+        "classify the business, and suggest an outreach angle. Results "
+        "cache in Supabase for 30 days."
+    )
+
+    # Index shops by store_url so we can label them with the user's
+    # visible identifier (store_url) but recover the full row on submit.
+    options = [
+        (r.get("store_url") or r.get("seller_id") or "—", r)
+        for r in bucket_rows
+    ]
+    if not options:
+        return
+    pick_idx = st.selectbox(
+        "Shop",
+        options=list(range(len(options))),
+        format_func=lambda i: options[i][0],
+        key=f"analyse_pick_{bucket_id}",
+        label_visibility="collapsed",
+    )
+    label, row = options[pick_idx]
+
+    force = st.checkbox(
+        "Re-fetch (ignore cached result)",
+        value=False, key=f"analyse_force_{bucket_id}",
+    )
+
+    if st.button(
+        "🔍 Analyse business",
+        key=f"analyse_btn_{bucket_id}",
+        type="primary",
+    ):
+        with st.spinner(f"Analysing {label}…"):
+            try:
+                sb = SupabaseClient()
+                profile = spe.analyse_seller(
+                    app_name=app_key,
+                    seller_id=row.get("seller_id") or "",
+                    store_url=row.get("store_url") or "",
+                    supabase_client=sb,
+                    force=force,
+                )
+            except Exception as err:
+                st.error(f"Analysis failed: {err}")
+                return
+        _render_profile(profile)
+
+
+def _render_profile(profile) -> None:
+    """Render a SellerProfile as a card in the main panel."""
+    if profile.source == "error":
+        st.warning(
+            f"Couldn't analyse: {profile.error or 'unknown reason'}",
+            icon="⚠️",
+        )
+        return
+    if profile.source == "dry_run":
+        st.info(
+            "**AI analysis isn't configured yet.** The storefront "
+            "fetched cleanly, but the Claude call was skipped because "
+            "`ANTHROPIC_API_KEY` isn't set in Streamlit secrets. Ask "
+            "the admin to add the key, then click **Analyse business** "
+            "again.",
+            icon="🧪",
+        )
+        return
+
+    # ---- Successful analysis ----
+    cat_html = ""
+    for c in profile.categories or []:
+        cat_html += (
+            f'<span style="display:inline-block; padding:2px 8px; '
+            f'margin:0 6px 4px 0; border-radius:12px; '
+            f'background:#334155; color:#e2e8f0; font-size:0.75rem;">'
+            f'{c}</span>'
+        )
+    origin = {"claude": "AI (fresh)", "cache": "cached", "dry_run": "dry-run"}.get(
+        profile.source, profile.source
+    )
+    st.markdown(
+        f'<div style="padding:14px 18px; margin-top:8px; '
+        f'background:#0f172a; border-radius:10px; border:1px solid #334155;">'
+        f'<div style="color:#94a3b8; font-size:0.72rem; '
+        f'text-transform:uppercase; letter-spacing:0.06em; '
+        f'font-weight:600;">Business type · {origin}</div>'
+        f'<div style="color:#f1f5f9; font-size:1.3rem; font-weight:700; '
+        f'margin:4px 0 10px;">{profile.business_type}</div>'
+        f'<div>{cat_html or "<span style=\'color:#64748b\'>No categories parsed</span>"}</div>'
+        f'<div style="margin-top:12px; color:#cbd5e1; font-size:0.92rem; '
+        f'line-height:1.5;"><b>Insight:</b> {profile.insight or "—"}</div>'
+        f'<div style="margin-top:8px; color:#a5b4fc; font-size:0.92rem; '
+        f'line-height:1.5;"><b>Opportunity:</b> {profile.opportunity or "—"}</div>'
+        f'</div>',
+        unsafe_allow_html=True,
     )
