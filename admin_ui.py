@@ -80,7 +80,25 @@ def main():
 # Apps tab
 # =================================================================
 def _render_apps_tab(principal: roles.UserPrincipal):
-    st.subheader("Configured admin panels")
+    # -----------------------------------------------------------
+    # "Run scrape now" — top-of-tab convenience for the Option A
+    # scheduling model (fixed twice-daily cron + on-demand button).
+    # Any editor+ can trigger a fresh workflow_dispatch without
+    # waiting for the next 00:00 / 12:00 IST tick. Takes ~3–5 min.
+    # -----------------------------------------------------------
+    top_col1, top_col2 = st.columns([3, 2])
+    with top_col1:
+        st.subheader("Configured admin panels")
+        st.caption(
+            "Scheduled scrape runs **twice a day** — 00:00 and 12:00 IST "
+            "(cron is defined in `.github/workflows/scrape.yml`). "
+            "Click **Run scrape now** for on-demand refresh."
+        )
+    with top_col2:
+        if roles.can(principal, "add_app"):
+            st.markdown("&nbsp;")  # vertical alignment with the caption above
+            if st.button("▶ Run scrape now", type="primary", use_container_width=True):
+                _trigger_scrape_now(principal)
 
     apps = app_registry.all_apps()
     if not apps:
@@ -429,6 +447,52 @@ def _commit_roles_yaml(principal, action: str):
     body = Path("roles.yaml").read_text(encoding="utf-8")
     msg = f"chore(roles): {roles.audit_stamp(principal.email, action)}"
     gh.put_file(ctx, "roles.yaml", body, msg)
+
+
+# =================================================================
+# On-demand workflow trigger — "Run scrape now" button
+# =================================================================
+def _trigger_scrape_now(principal: roles.UserPrincipal) -> None:
+    """POST a workflow_dispatch to run `.github/workflows/scrape.yml` now.
+
+    The scheduled cron fires twice a day (00:00 + 12:00 IST). This
+    gives editor+ users an escape hatch when they don't want to wait —
+    e.g. right after onboarding a new app they want to see data on
+    the dashboard before the next tick.
+
+    Surfaces success / failure inline via st.success / st.error. A
+    successful dispatch returns 204 immediately; the actual scrape
+    takes ~3–5 min (login + paginator walk × N apps), so we nudge the
+    user to re-check in a few minutes rather than blocking the UI.
+    """
+    # Re-gate in-function — defence in depth. The outer button is
+    # already hidden from viewers, but role could have been revoked
+    # between render and click.
+    if not roles.can(principal, "add_app"):
+        st.error("You don't have permission to trigger scrapes.")
+        return
+
+    try:
+        ctx = gh.context_from_streamlit(st)
+    except Exception as e:
+        st.error(
+            f"Couldn't reach GitHub: {e}\n\n"
+            "Check that the `[github]` block in Streamlit secrets has "
+            "`owner`, `repo`, and `pat` filled in. See MULTI_APP_DESIGN.md §3.2."
+        )
+        return
+
+    with st.spinner("Dispatching workflow..."):
+        try:
+            gh.trigger_scrape(ctx, reason=f"on-demand by {principal.email}")
+        except Exception as e:
+            st.error(f"Workflow dispatch failed: {e}")
+            return
+
+    st.success(
+        "Workflow dispatched. Fresh data should land in the dashboard in "
+        "~3–5 minutes. Watch the GitHub Actions `scrape-chap` run for progress."
+    )
 
 
 # =================================================================
