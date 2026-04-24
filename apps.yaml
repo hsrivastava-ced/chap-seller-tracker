@@ -27,3 +27,13 @@ apps:
   added_by: hsrivastava@threecolts.com
   added_at: 2026-04-17 00:00:00+00:00
   schema_status: canonical
+- id: shein_woocommerce
+  label: SHEIN WooCommerce
+  dropdown_value: shein_woocommerce
+  scrape_installs: true
+  scrape_uninstalls: true
+  creds_ref: APP_4
+  added_by: hsrivastava@threecolts.com
+  added_at: '2026-04-24T16:21:21+00:00'
+  schema_status: pending_review
+  notes: ''
