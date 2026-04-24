@@ -47,3 +47,13 @@ apps:
   added_at: '2026-04-24T13:12:34+00:00'
   schema_status: pending_review
   notes: ''
+- id: bigcommerce
+  label: BigCommerce
+  dropdown_value: bigcommerce
+  scrape_installs: true
+  scrape_uninstalls: true
+  creds_ref: APP_6
+  added_by: hsrivastava@threecolts.com
+  added_at: '2026-04-24T14:13:55+00:00'
+  schema_status: pending_review
+  notes: ''
