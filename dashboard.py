@@ -62,8 +62,40 @@ REPORTS_DIR = RESULTS_DIR / "reports"
 LATEST_RUN_FILE = RESULTS_DIR / "latest" / "run.json"
 
 # Internal app keys the scraper writes. The Sidebar shows stakeholder
-# labels (SHEIN / TEMU US / TEMU EU / All Apps) via DISPLAY_NAMES.
+# labels (SHEIN / TEMU US / TEMU EU / …) via DISPLAY_NAMES. Seeded with
+# the original 3 apps + "all_apps" so `from dashboard import APP_KEYS`
+# callers never see an empty list at import time. It's rebound in
+# main() (via _discover_app_keys) to the actual apps present in
+# apps.yaml AND the loaded run data — new apps onboarded through the
+# Admin UI automatically show up without touching this list.
 APP_KEYS: list[str] = ["all_apps", "shein", "shopify_temu", "shopify_temu_eu"]
+
+
+def _discover_app_keys(
+    sellers_by_app: dict, uninstalls_by_app: dict,
+) -> list[str]:
+    """Return the canonical APP_KEYS list for this run.
+
+    Source of truth is the registry (apps.yaml) — anything marked
+    pending_review or canonical is fair game. We also union in any
+    app_id actually present in the loaded scrape data, in case the
+    registry hasn't caught up yet (e.g. a scrape committed before
+    apps.yaml was updated). "all_apps" is always first so downstream
+    `[a for a in APP_KEYS if a != "all_apps"]` filters still work.
+    """
+    try:
+        import app_registry
+        registered = [a.id for a in app_registry.all_apps() or []]
+    except Exception:
+        registered = []
+    in_data = list((sellers_by_app or {}).keys()) + list(
+        (uninstalls_by_app or {}).keys()
+    )
+    seen: list[str] = []
+    for key in registered + in_data:
+        if key and key != "all_apps" and key not in seen:
+            seen.append(key)
+    return ["all_apps"] + seen
 
 # Apps that surface a multi-platform mix (Shopify + Prestashop + ...).
 # The Framework / Platform and Uninstall Platform sections only make
@@ -809,22 +841,24 @@ def _render_sidebar(
 
         # Multi-select across every configured app. No more "All Apps"
         # pseudo-option — the user explicitly picks which apps to include.
-        # Default: everything selected (that matches the prior
-        # "All Apps" default without confusing naming).
+        # Default is the FIRST app in the registry order (shopify_temu
+        # → TEMU US by current apps.yaml order). Stakeholders wanted
+        # the dashboard to open on a single real app rather than an
+        # all-app aggregate — they can then add more apps to compare.
         selected_apps = st.multiselect(
             "Apps",
             options=available_apps,
-            default=available_apps,
+            default=[available_apps[0]] if available_apps else [],
             format_func=display_name,
             help=(
-                "Pick one or more apps to focus on. Leaving all selected "
-                "shows the combined view; deselecting narrows scope to "
-                "the apps you leave checked."
+                "Pick one or more apps to focus on. The dashboard "
+                "opens on the first app; add more to compare side by "
+                "side, or select all for the combined view."
             ),
         )
         if not selected_apps:
-            # Empty selection is unusable — silently fall back to all.
-            selected_apps = list(available_apps)
+            # Empty selection is unusable — silently fall back to first.
+            selected_apps = available_apps[:1] or list(available_apps)
 
         # Legacy key for KPI cards + single-app panels that still take
         # one `app_key: str`. All-selected → "all_apps" (pre-aggregated).
@@ -1811,6 +1845,13 @@ def main() -> None:
         drop_test_stores=False,  # already stripped above
     )
     available_periods = stake_full["monthly"].get("periods", [])
+
+    # Rebind APP_KEYS to whatever the registry + data actually has.
+    # Picks up newly onboarded apps (shein_woocommerce,
+    # shopify_gearexchange, …) without editing the hardcoded list above.
+    discovered = _discover_app_keys(sellers_by_app, unins_by_app)
+    APP_KEYS.clear()
+    APP_KEYS.extend(discovered)
 
     # Which apps the data actually has — sidebar multiselect is sourced
     # from this so we never offer apps the dataset doesn't include.

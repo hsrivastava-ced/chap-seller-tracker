@@ -133,13 +133,14 @@ def _push_all_snapshots(
     rejections (count will be 0 when the anon key is blocked)."""
     written: dict[str, int] = {}
     for app, rows in sorted(sellers_by_app.items()):
-        label = f"{app}.sellers"
-        written[label] = client.push_snapshot(
+        written[f"{app}.sellers"] = client.push_snapshot(
             app_name=app, kind="sellers", rows=rows, run_stamp=run_stamp,
         )
-        # Task #80: also project into the relational sellers table so the
-        # dashboard can query by seller_id and preserve manual edits.
-        # Snapshot is authoritative; a failure here must not abort the run.
+        # Also upsert into the relational public.sellers table (Task #80)
+        # so the dashboard can query per-seller state and preserve manual
+        # edits across scrapes. Failure here must NOT abort — the jsonb
+        # snapshot above is authoritative; the relational projection is
+        # a convenience.
         try:
             written[f"{app}.sellers.relational"] = client.upsert_sellers(
                 app_name=app, rows=rows, run_stamp=run_stamp,
@@ -150,8 +151,7 @@ def _push_all_snapshots(
             )
             written[f"{app}.sellers.relational"] = 0
     for app, rows in sorted(uninstalls_by_app.items()):
-        label = f"{app}.uninstalls"
-        written[label] = client.push_snapshot(
+        written[f"{app}.uninstalls"] = client.push_snapshot(
             app_name=app, kind="uninstalls", rows=rows, run_stamp=run_stamp,
         )
     return written
