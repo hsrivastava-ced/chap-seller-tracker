@@ -1912,10 +1912,15 @@ def main() -> None:
     apply_shared_theme()  # shared sidebar / button look across pages
     _inject_css()
 
-    # Sidebar: identity + (if allowed) link to admin.
+    # Sidebar: identity + quick-nav links.
     auth.sign_out_button(st)
-    if roles.can(principal, "see_admin_tab"):
-        with st.sidebar:
+    with st.sidebar:
+        st.page_link(
+            "pages/Intelligence.py",
+            label="🎯 Customer Intelligence",
+            help="Per-seller leads for sales reps — priority, churn risk, upsell.",
+        )
+        if roles.can(principal, "see_admin_tab"):
             st.page_link(
                 "pages/Admin.py",
                 label="⚙ Admin panel",
