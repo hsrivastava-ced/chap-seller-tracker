@@ -155,20 +155,30 @@ def login_and_prepare(page, app_id, username=None, password=None):
     Crucially, option `value` attributes are exactly the snake-case ids
     from `.env` — no fuzzy matching required.
     """
-    # Resolve per-app credentials. Falling back to the legacy module-level
-    # USERNAME/PASSWORD is wrong for any app other than #1, so prefer the
-    # per-app lookup.
+    # Resolve per-app credentials strictly. The previous version fell
+    # back to the legacy USERNAME/PASSWORD module-level values (which
+    # are just APP_1's creds) when a specific app's creds were missing
+    # — that silently submitted the wrong credentials for every app
+    # other than APP_1, making the failure look like "cHAP rejected our
+    # login" instead of "we don't have creds for this app". Fail loudly
+    # with an actionable message instead.
     if username is None or password is None:
         lookup = CREDENTIALS.get(app_id)
         if lookup:
             username = username or lookup[0]
             password = password or lookup[1]
-        else:
-            username = username or USERNAME
-            password = password or PASSWORD
     if not username or not password:
+        # Locate the app in the registry so we can tell the user the
+        # exact APP_N_USER/APP_N_PASS keys to set.
+        import app_registry
+        app = app_registry.get(app_id)
+        ref = (app.creds_ref if app else "") or "APP_?"
         raise RuntimeError(
-            f"No credentials found for app_id='{app_id}'. Check .env and config.CREDENTIALS."
+            f"No credentials configured for app_id={app_id!r}. Set "
+            f"{ref}_USER and {ref}_PASS in .env (local) or as GitHub "
+            f"Actions secrets (CI). The legacy USERNAME/PASSWORD fallback "
+            f"was intentionally removed — it masked missing-creds bugs "
+            f"by logging in as the wrong account."
         )
 
     logging.info(f"🚀 Navigating to {LOGIN_URL}")
