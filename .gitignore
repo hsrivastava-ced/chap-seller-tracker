@@ -3,6 +3,16 @@
 __pycache__/
 *.pyc
 pytest-cache-files-*/
+.DS_Store
+
+# Editor / IDE configs (local preference, not shared)
+.cursorrules
+.kiro/
+.opencode.json
+.windsurfrules
+
+# Local diagnostic / one-shot scripts (kept out of CI)
+scripts/sync_env_to_github_secrets.py
 
 # Added by code-review-graph
 .code-review-graph/
