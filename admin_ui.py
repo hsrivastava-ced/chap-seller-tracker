@@ -120,37 +120,44 @@ def main():
 
     st.title("Admin")
     st.caption(
-        "Manage admin-panel sources to scrape and (super admins only) "
-        "user access. Changes here commit back to the repo and trigger "
-        "Streamlit Cloud to redeploy within ~30 s."
+        "Each tab does one thing. Changes commit back to the repo and "
+        "Streamlit Cloud redeploys within ~30 s."
     )
 
-    tab_labels = ["Apps"]
+    # Tab structure (split by concern rather than role — tabs the user
+    # doesn't have permission for still show, just with a polite
+    # "view-only" message inside):
+    #   - Overview        — configured apps + Run scrape now
+    #   - Add new app     — focused form (requires vault unlocked)
+    #   - Settings        — credential vault + scrape schedule
+    #   - Users           — super-admin only, hidden otherwise
+    tab_labels = ["Overview", "Add new app", "Settings"]
     if roles.can(principal, "see_users_tab"):
         tab_labels.append("Users")
     tabs = st.tabs(tab_labels)
 
     with tabs[0]:
-        _render_apps_tab(principal)
-
-    if len(tabs) > 1:
-        with tabs[1]:
+        _render_overview_tab(principal)
+    with tabs[1]:
+        _render_add_app_tab(principal)
+    with tabs[2]:
+        _render_settings_tab(principal)
+    if len(tabs) > 3:
+        with tabs[3]:
             _render_users_tab(principal)
 
 
 # =================================================================
-# Apps tab
+# Overview tab — the apps table + Run scrape now
 # =================================================================
-def _render_apps_tab(principal: roles.UserPrincipal):
-    # -----------------------------------------------------------
-    # Top row: header + on-demand Run now button.
-    # -----------------------------------------------------------
+def _render_overview_tab(principal: roles.UserPrincipal):
     top_col1, top_col2 = st.columns([3, 2])
     with top_col1:
         st.subheader("Configured admin panels")
         st.caption(
-            "All configured apps are scraped on the shared schedule below. "
-            "Click **Run scrape now** to trigger an on-demand run."
+            "These apps run on the shared schedule. To add one, open the "
+            "**Add new app** tab. To change how often they run, open "
+            "**Settings**."
         )
     with top_col2:
         if roles.can(principal, "add_app"):
@@ -158,63 +165,44 @@ def _render_apps_tab(principal: roles.UserPrincipal):
             if st.button("▶ Run scrape now", type="primary", use_container_width=True):
                 _trigger_scrape_now(principal)
 
-    # Global scrape schedule selector — one knob controls the cron for
-    # ALL configured apps. Minimum 6 h to respect cHAP rate-limits and
-    # the fact that one full scrape takes ~5 min per app.
-    _render_schedule_section(principal)
-
     apps = app_registry.all_apps()
     if not apps:
-        st.info("No apps configured yet. Fill in the form below to add the first one.")
-    else:
-        # Status emoji (no Streamlit color-tag markdown — st.dataframe
-        # renders cell content as plain text, so `:green[...]` would show
-        # literally). Also dropped the "Creds" column: it was checking
-        # os.getenv(APP_N_USER) which only exists inside the GitHub
-        # Actions runner — from Streamlit Cloud it ALWAYS reported
-        # "missing", which was misleading rather than informative.
-        status_label = {
-            "canonical": "🟢 canonical",
-            "pending_review": "🟡 pending review",
-            "blocked": "🔴 blocked",
-        }
-        rows = []
-        for a in apps:
-            # str() to survive PyYAML auto-coercing unquoted ISO-like
-            # timestamps into datetime objects (can't slice a datetime).
-            added_at_str = str(a.added_at) if a.added_at else "—"
-            rows.append({
-                "App": a.label,
-                "Id": a.id,
-                "Status": status_label.get(a.schema_status, a.schema_status),
-                "Installs": "✅" if a.scrape_installs else "—",
-                "Uninstalls": "✅" if a.scrape_uninstalls else "—",
-                # Short handle instead of full email for readability.
-                "Added by": (a.added_by or "—").split("@")[0],
-                # Just the date portion — full timestamp is overkill here.
-                "Added": added_at_str[:10],
-            })
-        st.dataframe(rows, hide_index=True, use_container_width=True)
-
-    st.divider()
-
-    st.subheader("Add a new admin panel")
-    if not roles.can(principal, "add_app"):
-        st.info("You have view-only access. Ask a super admin to grant you editor access to add new apps.")
+        st.info(
+            "No apps configured yet. Open the **Add new app** tab to set "
+            "up the first one."
+        )
         return
-    _render_add_app_wizard(principal)
+
+    # Status emoji — st.dataframe renders cells as plain text, so no
+    # `:green[...]` Streamlit tags. Creds column deliberately omitted
+    # (see earlier fix: env-var check never succeeds on Streamlit Cloud).
+    status_label = {
+        "canonical": "🟢 canonical",
+        "pending_review": "🟡 pending review",
+        "blocked": "🔴 blocked",
+    }
+    rows = []
+    for a in apps:
+        # str() to survive PyYAML auto-coercing unquoted ISO timestamps
+        # into datetime objects (can't slice a datetime).
+        added_at_str = str(a.added_at) if a.added_at else "—"
+        rows.append({
+            "App": a.label,
+            "Id": a.id,
+            "Status": status_label.get(a.schema_status, a.schema_status),
+            "Installs": "✅" if a.scrape_installs else "—",
+            "Uninstalls": "✅" if a.scrape_uninstalls else "—",
+            "Added by": (a.added_by or "—").split("@")[0],
+            "Added": added_at_str[:10],
+        })
+    st.dataframe(rows, hide_index=True, use_container_width=True)
 
 
 def _render_add_app_wizard(principal: roles.UserPrincipal):
-    """Single-form onboarding: name → creds → scrape toggles → commit + dispatch.
-
-    Replaces the 5-step wizard. Three reasons:
-      - Playwright discovery never worked on Streamlit Cloud (no Chromium).
-      - The dry-scrape step was a TODO stub that returned canned data.
-      - Multi-step state machine made a rare action feel heavy.
-    Validation that used to live in the dry-scrape step now happens on the
-    first real scrape — the guardrail + schema_guard flag the app
-    "pending_review" or "canonical" in the table above.
+    """Focused onboarding form. Assumes the credential vault is already
+    unlocked (the caller — `_render_add_app_tab` — gates on that and
+    routes the user to Settings first if not). No CREDS mechanics
+    surface in this form; it just collects the per-app fields.
     """
     # Show last-success banner so a rerun after submit feels intentional.
     last = st.session_state.pop("_add_app_success", None)
@@ -235,19 +223,6 @@ def _render_add_app_wizard(principal: roles.UserPrincipal):
         st.success("🎉 Every supported cHAP app is already onboarded.")
         return
 
-    cache_present = bool(st.session_state.get("_creds_cache"))
-    if not cache_present:
-        st.warning(
-            "**First time adding an app in this session.** GitHub doesn't let "
-            "us read the current `CREDS` secret back, so you'll need to paste "
-            "the existing `CREDS` bundle once (see the section near the bottom "
-            "of the form). The app remembers it for later adds in the same session."
-        )
-
-    # clear_on_submit=True resets the form fields after a successful add so
-    # that a double-click can't silently re-submit stale values against a
-    # different dropdown pick. The CREDS textarea still reappears with its
-    # cached value on the next render (we re-key it off session_state).
     with st.form("add_app_form", clear_on_submit=True):
         # --- App selection -----------------------------------------------
         labels = [f"{a['label']} — {a['value']}" for a in available]
@@ -306,30 +281,10 @@ def _render_add_app_wizard(principal: roles.UserPrincipal):
             value=True,
             help=(
                 "Kicks off the GitHub Actions workflow for this new app. "
-                "First run takes ~3-5 min; results show up in the Apps table "
-                "above and on the Dashboard."
+                "First run takes ~3-5 min; results show up in the Overview "
+                "tab above and on the Dashboard."
             ),
         )
-
-        # --- CREDS bundle paste-back ------------------------------------
-        expander_label = (
-            "Current CREDS bundle  (cached — expand only to override)"
-            if cache_present
-            else "Current CREDS bundle  ← REQUIRED for first add"
-        )
-        with st.expander(expander_label, expanded=not cache_present):
-            st.caption(
-                "We can't read the existing `CREDS` secret back from GitHub, "
-                "so paste its current body here. It's the `KEY=value` block "
-                "currently stored under repo Settings → Secrets → `CREDS`."
-            )
-            creds_body = st.text_area(
-                "CREDS body",
-                value=st.session_state.get("_creds_cache", ""),
-                height=160,
-                label_visibility="collapsed",
-                placeholder="APP_1_USER=...\nAPP_1_PASS=...\nAPP_2_USER=...",
-            )
 
         submitted = st.form_submit_button(
             "Add admin panel", type="primary", use_container_width=True
@@ -346,23 +301,15 @@ def _render_add_app_wizard(principal: roles.UserPrincipal):
         errs.append("Email and password are both required.")
     if not (wants_installs or wants_uninstalls):
         errs.append("Pick at least one of installs / uninstalls.")
-    if not creds_body.strip():
-        errs.append(
-            "Paste the current CREDS bundle in the section above. We need "
-            "it to append the new credentials without dropping existing ones."
-        )
     if errs:
-        # Validation failures — not a bug, just a missing field. Use
-        # warning severity so the user doesn't start training themselves
-        # to ignore red alerts.
         show_warning(
             "Please fix the following before submitting:",
             hint="\n\n".join(f"• {e}" for e in errs),
         )
         return
 
-    # Dropdown value doubles as the internal id — they're identical by
-    # design for cHAP (the login page's value IS the stable key we use).
+    # Vault is guaranteed present — the tab-level gate routes the user
+    # to Settings if `_creds_cache` is missing. Pull and commit.
     _commit_new_app(
         principal=principal,
         name=display_name.strip(),
@@ -372,7 +319,7 @@ def _render_add_app_wizard(principal: roles.UserPrincipal):
         password=password,
         wants_installs=wants_installs,
         wants_uninstalls=wants_uninstalls,
-        current_creds=creds_body,
+        current_creds=st.session_state["_creds_cache"],
         run_after=run_after,
     )
 
@@ -794,6 +741,226 @@ def _rewrite_cron_in_workflow(
             "Edit the file manually once and re-try."
         )
     return new_text
+
+
+# =================================================================
+# Add-new-app tab — wrapper that gates on the credential vault
+# =================================================================
+def _render_add_app_tab(principal: roles.UserPrincipal) -> None:
+    """Gate on vault + permission, then render the focused add form.
+
+    Two early-exit paths:
+      1. Non-editor: polite "view-only" message.
+      2. Editor but vault locked: deep-link to Settings → Vault.
+    Neither exposes CREDS-bundle mechanics in this tab.
+    """
+    if not roles.can(principal, "add_app"):
+        show_info(
+            "You have view-only access.",
+            hint="Ask a super admin to grant you the **editor** role in the "
+                 "Users tab so you can onboard new apps.",
+        )
+        return
+
+    if not st.session_state.get("_creds_cache"):
+        show_info(
+            "Set up the credential vault before adding apps.",
+            hint=(
+                "Open the **Settings** tab → **Credential vault** section → "
+                "paste the current CREDS bundle once. The vault stays "
+                "unlocked for this browser session, so you only do it once "
+                "per login."
+            ),
+        )
+        return
+
+    _render_add_app_wizard(principal)
+
+
+# =================================================================
+# Settings tab — credential vault + scrape schedule
+# =================================================================
+def _render_settings_tab(principal: roles.UserPrincipal) -> None:
+    if not roles.can(principal, "add_app"):
+        show_info(
+            "Settings are editor-only.",
+            hint="Ask a super admin to grant you the **editor** role in the "
+                 "Users tab.",
+        )
+        return
+
+    st.subheader("🔑 Credential vault")
+    st.caption(
+        "One-time per session: paste the current `CREDS` GitHub secret so "
+        "the UI can append new app credentials without overwriting the "
+        "existing ones. GitHub's API doesn't allow reading secrets back, "
+        "hence the paste."
+    )
+    _render_vault_section(principal)
+
+    st.divider()
+
+    st.subheader("⏱ Scrape schedule")
+    _render_schedule_section(principal)
+
+
+# =================================================================
+# Credential vault UI + parser
+# =================================================================
+# Matches gh.parse_dotenv's grammar but ALSO records per-line errors
+# so the UI can point the user at the exact broken line.
+_DOTENV_LINE_RE = re.compile(
+    r"^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$"
+)
+
+
+def _parse_creds_with_errors(text: str) -> dict:
+    """Parse a CREDS body into {'valid': {KEY: value}, 'issues': [...]}.
+
+    Blank lines and `#` comments are ignored silently (same as the
+    GitHub Actions workflow's parser). Everything else must match
+    KEY=value or it's surfaced as a numbered issue.
+    """
+    valid: dict[str, str] = {}
+    issues: list[dict] = []
+    for idx, raw in enumerate(text.splitlines(), start=1):
+        line = raw.rstrip("\r")
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        m = _DOTENV_LINE_RE.match(line)
+        if not m:
+            issues.append({
+                "line": idx,
+                "content": line,
+                "reason": "not a KEY=value line",
+            })
+            continue
+        k, v = m.group(1), m.group(2)
+        if len(v) >= 2 and v[0] == v[-1] and v[0] in ("'", '"'):
+            v = v[1:-1]
+        valid[k] = v
+    return {"valid": valid, "issues": issues}
+
+
+def _group_creds_by_app(valid: dict) -> dict[str, list[str]]:
+    """Collapse APP_N_USER/APP_N_PASS pairs back to their APP_N root.
+    Anything that doesn't match that shape lands in the special
+    `_extras` bucket (LOGIN_URL, HEADLESS, etc.)."""
+    out: dict[str, list[str]] = {}
+    for key in valid:
+        m = re.match(r"^(APP_\d+)_(USER|PASS)$", key)
+        if m:
+            out.setdefault(m.group(1), []).append(m.group(2))
+        else:
+            out.setdefault("_extras", []).append(key)
+    return out
+
+
+def _render_vault_section(principal: roles.UserPrincipal) -> None:
+    """Show vault status + an inline paste editor with live validation."""
+    cached = st.session_state.get("_creds_cache", "")
+    editor_mode = st.session_state.get("_show_vault_editor", False) or not cached
+
+    if not editor_mode:
+        # Locked+cached state — just show a green status card + actions.
+        parsed = _parse_creds_with_errors(cached)
+        apps_map = _group_creds_by_app(parsed["valid"])
+        app_count = sum(1 for k in apps_map if k != "_extras")
+        st.success(
+            f"🔓 **Vault unlocked** — {app_count} app(s), "
+            f"{len(parsed['valid'])} total entries cached for this session."
+        )
+        with st.expander("View cached keys (names only, values hidden)"):
+            for app_ref in sorted(apps_map.keys()):
+                if app_ref == "_extras":
+                    continue
+                pair = sorted(apps_map[app_ref])
+                st.write(f"- **{app_ref}**: {', '.join(pair)}")
+            extras = apps_map.get("_extras", [])
+            if extras:
+                st.write(f"- **Other**: {', '.join(sorted(extras))}")
+
+        c1, c2, _ = st.columns([1, 1, 3])
+        with c1:
+            if st.button("Replace bundle", help="Paste a new CREDS body."):
+                st.session_state["_show_vault_editor"] = True
+                st.rerun()
+        with c2:
+            if st.button("Lock vault", help="Clears the cached CREDS body."):
+                st.session_state.pop("_creds_cache", None)
+                st.session_state.pop("_show_vault_editor", None)
+                st.rerun()
+        return
+
+    # Editor mode — the text area lives OUTSIDE an st.form so we can
+    # show live validation as the user types (forms only update values
+    # on submit).
+    body = st.text_area(
+        "Paste the current CREDS bundle",
+        value=cached,
+        height=220,
+        placeholder="APP_1_USER=ops@cedcommerce.com\nAPP_1_PASS=...\n"
+                    "APP_2_USER=...\nAPP_2_PASS=...\nLOGIN_URL=https://...",
+        help="Copy from the GitHub repo → Settings → Secrets and variables "
+             "→ Actions → CREDS (you can only see it when creating/updating it).",
+        key="_vault_body_input",
+    )
+
+    # Live inline feedback — re-parses on every keystroke rerun.
+    if body.strip():
+        preview = _parse_creds_with_errors(body)
+        valid = preview["valid"]
+        issues = preview["issues"]
+        if issues:
+            shown = issues[:5]
+            extra = len(issues) - len(shown)
+            bullets = "\n\n".join(
+                f"• **Line {i['line']}:** `{i['content'][:60]}` — {i['reason']}"
+                for i in shown
+            )
+            if extra > 0:
+                bullets += f"\n\n• _(+ {extra} more — fix the first ones and re-check)_"
+            show_warning("Some lines don't look valid.", hint=bullets)
+        elif not valid:
+            show_info(
+                "Waiting for at least one valid `KEY=value` line…",
+                hint="Comments (`#`) and blank lines are fine.",
+            )
+        else:
+            apps_map = _group_creds_by_app(valid)
+            app_count = sum(1 for k in apps_map if k != "_extras")
+            pieces = [f"**{app_count} app(s)**", f"{len(valid)} entries"]
+            if apps_map.get("_extras"):
+                pieces.append(f"{len(apps_map['_extras'])} extras")
+            st.success(
+                "✅ Looks good — " + ", ".join(pieces) + ". "
+                "Click **Unlock vault** below to cache."
+            )
+
+    c1, c2, _ = st.columns([1, 1, 3])
+    with c1:
+        if st.button("Unlock vault", type="primary", key="vault_unlock"):
+            if not body.strip():
+                show_warning("Paste a CREDS bundle first.")
+                return
+            preview = _parse_creds_with_errors(body)
+            if preview["issues"]:
+                show_warning(
+                    f"Fix the {len(preview['issues'])} invalid line(s) before "
+                    "unlocking — the live preview above shows which."
+                )
+                return
+            if not preview["valid"]:
+                show_warning("No valid `KEY=value` lines found.")
+                return
+            st.session_state["_creds_cache"] = body
+            st.session_state.pop("_show_vault_editor", None)
+            st.rerun()
+    with c2:
+        if cached and st.button("Cancel", key="vault_cancel"):
+            st.session_state.pop("_show_vault_editor", None)
+            st.rerun()
 
 
 # =================================================================
