@@ -420,15 +420,19 @@ def _commit_new_app(
             )
             return
 
-    # 3. (optional) workflow dispatch
+    # 3. (optional) workflow dispatch — scoped to the NEW app only so
+    # onboarding doesn't trigger a full re-scrape of every configured app
+    # (which would hammer cHAP's MongoDB unnecessarily).
     if run_after:
         try:
             gh.trigger_scrape(
-                ctx, reason=f"onboarding {entry.id} by {principal.email}"
+                ctx,
+                reason=f"onboarding {entry.id} by {principal.email}",
+                target_app=entry.id,
             )
             dispatch_line = (
-                f" Scrape dispatched — check the Actions tab for results in "
-                f"~3-5 min."
+                f" Test scrape dispatched for `{entry.id}` only — results "
+                f"in ~3-5 min (existing apps are not re-scraped)."
             )
         except Exception as e:
             dispatch_line = f" (Added, but scrape dispatch failed: {e})"

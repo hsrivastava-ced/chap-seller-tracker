@@ -49,6 +49,10 @@ on:
         description: "Why this manual run?"
         required: false
         default: "on-demand"
+      target_app:
+        description: "Limit scrape to this app id (leave blank to scrape all)"
+        required: false
+        default: ""
 
 concurrency:
   group: scrape-chap-${{ github.ref }}
@@ -200,7 +204,14 @@ jobs:
         # step; config.py's os.getenv() picks them up directly, and
         # python-dotenv's load_dotenv() is a no-op (it never overrides
         # existing env vars unless override=True is passed).
+        #
+        # TARGET_APP env var (from workflow_dispatch input) lets admin-UI
+        # dispatches scope the run to a single app so onboarding a new
+        # panel doesn't re-scrape every existing app and hammer cHAP's
+        # MongoDB. Empty → scrape everything (scheduled runs).
         shell: bash
+        env:
+          TARGET_APP: ${{ inputs.target_app }}
         run: |
           set -e
           python scraper.py

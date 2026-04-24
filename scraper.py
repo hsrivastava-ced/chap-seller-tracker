@@ -2383,6 +2383,15 @@ def main():
     previous_counts = _load_previous_counts()
     grid_cfg = sv._load_grid_columns()
 
+    # TARGET_APP — when set by the workflow_dispatch input, scrape only
+    # that one app (by id). Admin-UI onboarding uses this to validate a
+    # new panel without hammering cHAP's backend with a full re-scrape
+    # of everything already configured. Empty / unset → behave as before
+    # (loop all apps — that's the scheduled-cron path).
+    target_app = (os.getenv("TARGET_APP") or "").strip()
+    if target_app:
+        logging.info(f"🎯 TARGET_APP set → scoping run to '{target_app}' only.")
+
     # Per-app validator context lives outside playwright so a browser crash
     # can't lose it. `traces` holds the pagination traces produced by the
     # paginator's trace_sink; `observed_labels` holds what Customize Grid
@@ -2398,6 +2407,15 @@ def main():
         all_uninstalls = {}
         for app_name, app_id in APP_IDS.items():
             if not app_id:
+                continue
+            # Targeted single-app run: skip anything that doesn't match.
+            # Match on either the app's key in the registry (name) or its
+            # runtime id, since both forms flow through TARGET_APP depending
+            # on the caller.
+            if target_app and target_app not in (app_name, app_id):
+                logging.info(
+                    f"⏭  Skipping '{app_name}' — TARGET_APP='{target_app}'."
+                )
                 continue
             user, pwd = CREDENTIALS.get(app_id, (None, None))
             logging.info(f"\n--- ATTEMPTING: {app_name} ({app_id}) as {user} ---")

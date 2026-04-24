@@ -301,13 +301,25 @@ def read_file(ctx: RepoContext, repo_path: str) -> str:
 # ---------------------------------------------------------------------
 # Trigger workflow
 # ---------------------------------------------------------------------
-def trigger_scrape(ctx: RepoContext, reason: str = "onboarding") -> None:
-    """POST workflow_dispatch to run scrape-chap now."""
+def trigger_scrape(
+    ctx: RepoContext,
+    reason: str = "onboarding",
+    target_app: str = "",
+) -> None:
+    """POST workflow_dispatch to run scrape-chap now.
+
+    When `target_app` is set, the workflow scopes the run to that one
+    app only (admin-UI onboarding path). Empty target_app = scrape all
+    (on-demand "Run scrape now" from the Overview tab).
+    """
     import requests
+    inputs = {"reason": reason}
+    if target_app:
+        inputs["target_app"] = target_app
     r = requests.post(
         f"{ctx.base}/actions/workflows/scrape.yml/dispatches",
         headers=ctx.headers,
-        json={"ref": ctx.branch, "inputs": {"reason": reason}},
+        json={"ref": ctx.branch, "inputs": inputs},
         timeout=15,
     )
     if r.status_code not in (204,):
