@@ -16,9 +16,9 @@ Layout:
     │                                                 │
     │ --- Apps tab -------------------------------- │
     │  Table of current apps with status badges       │
-    │  "Add new app" wizard (editor+)                 │
-    │   1. discover dropdown  2. creds  3. scrape     │
-    │   4. schema drift report  5. commit + trigger   │
+    │  "Add new app" single form (editor+):           │
+    │   name · id · dropdown · creds · scrape toggles │
+    │   → commits apps.yaml + CREDS secret, dispatches │
     │                                                 │
     │ --- Users tab ------------------------------- │
     │  List (email, role, grantor, granted_at)        │
@@ -26,10 +26,10 @@ Layout:
     └─────────────────────────────────────────────────┘
 
 Kept dependency-light: imports the local modules (auth, roles,
-app_registry, schema_guard, github_secret_updater) plus streamlit +
-yaml. No Playwright import at the top level; the "discover dropdown"
-step lazy-imports it so the page still loads if Chromium isn't
-installed on the Streamlit Cloud environment.
+app_registry, github_secret_updater) plus streamlit + yaml. No Playwright
+dependency — schema validation happens in the first real scrape (via
+scrape_validator + schema_guard inside the GitHub Actions run), so the
+admin UI never has to spawn a browser.
 """
 from __future__ import annotations
 
@@ -42,7 +42,6 @@ import app_registry
 import auth
 import github_secret_updater as gh
 import roles
-import schema_guard
 from app_registry import AppEntry
 
 
@@ -102,7 +101,7 @@ def _render_apps_tab(principal: roles.UserPrincipal):
 
     apps = app_registry.all_apps()
     if not apps:
-        st.info("No apps configured yet. Use the wizard below to add the first one.")
+        st.info("No apps configured yet. Fill in the form below to add the first one.")
     else:
         rows = []
         for a in apps:
@@ -135,246 +134,241 @@ def _render_apps_tab(principal: roles.UserPrincipal):
 
 
 def _render_add_app_wizard(principal: roles.UserPrincipal):
-    """Five-step wizard: discover → creds → selection → dry-run → commit."""
-    # Use session state to remember progress across reruns.
-    state = st.session_state.setdefault("_wizard", {"step": 1})
+    """Single-form onboarding: name → creds → scrape toggles → commit + dispatch.
 
-    st.markdown(f"**Step {state['step']} of 5**")
+    Replaces the 5-step wizard. Three reasons:
+      - Playwright discovery never worked on Streamlit Cloud (no Chromium).
+      - The dry-scrape step was a TODO stub that returned canned data.
+      - Multi-step state machine made a rare action feel heavy.
+    Validation that used to live in the dry-scrape step now happens on the
+    first real scrape — the guardrail + schema_guard flag the app
+    "pending_review" or "canonical" in the table above.
+    """
+    # Show last-success banner, if any, so a rerun after submit doesn't
+    # look like nothing happened.
+    last = st.session_state.pop("_add_app_success", None)
+    if last:
+        st.success(last)
 
-    if state["step"] == 1:
-        _wizard_step_discover(state)
-    elif state["step"] == 2:
-        _wizard_step_credentials(state)
-    elif state["step"] == 3:
-        _wizard_step_scrape_selection(state)
-    elif state["step"] == 4:
-        _wizard_step_dry_run(state, principal)
-    elif state["step"] == 5:
-        _wizard_step_commit(state, principal)
+    existing_ids = {a.id for a in app_registry.all_apps()}
+    cache_present = bool(st.session_state.get("_creds_cache"))
 
-    if st.button("Start over", key="wizard_reset"):
-        st.session_state["_wizard"] = {"step": 1}
-        st.rerun()
-
-
-def _wizard_step_discover(state: dict):
-    st.markdown("Pick an app from the CedCommerce login-page dropdown.")
-    st.caption(
-        "We run a headless Playwright session against the login page to read the "
-        "current list of app options, then filter out ones you've already configured. "
-        "If discovery fails (e.g. Playwright not installed on Streamlit Cloud), use "
-        "the manual-entry fallback below."
-    )
-
-    existing_values = {a.dropdown_value for a in app_registry.all_apps()}
-
-    col_auto, col_manual = st.columns(2)
-    with col_auto:
-        if st.button("Discover dropdown options", type="primary"):
-            with st.spinner("Fetching dropdown options..."):
-                try:
-                    options = _discover_dropdown_options()
-                except Exception as e:
-                    st.error(f"Discovery failed: {e}")
-                    options = []
-            state["discovered_options"] = options
-
-    with col_manual:
-        manual = st.text_input(
-            "…or enter the dropdown value directly",
-            help="e.g. `walmart_ca` — exact string from the login dropdown",
+    if not cache_present:
+        st.info(
+            "**First time adding an app in this session.** GitHub doesn't let us "
+            "read the current `CREDS` secret back, so the first add needs you to "
+            "paste the current body (see the **Current CREDS bundle** section at "
+            "the bottom). Subsequent adds will reuse a cached copy automatically."
         )
-        manual_label = st.text_input("Friendly label", help="e.g. 'Walmart CA'")
-        if st.button("Use manual entry"):
-            if manual:
-                state["selected_option"] = {"value": manual.strip(), "label": manual_label.strip() or manual.strip()}
-                state["step"] = 2
-                st.rerun()
 
-    if state.get("discovered_options"):
-        options = state["discovered_options"]
-        available = [o for o in options if o["value"] not in existing_values]
-        if not available:
-            st.warning("Every dropdown option is already configured. Nothing new to add.")
-            return
-        choice_labels = [f"{o['label']} ({o['value']})" for o in available]
-        picked_idx = st.selectbox("Pick one", range(len(available)), format_func=lambda i: choice_labels[i])
-        if st.button("Next →"):
-            state["selected_option"] = available[picked_idx]
-            state["step"] = 2
-            st.rerun()
+    with st.form("add_app_form", clear_on_submit=False):
+        c1, c2 = st.columns(2)
+        with c1:
+            name = st.text_input(
+                "Friendly name",
+                placeholder="Walmart CA",
+                help="Shown in dashboards and the apps table.",
+            )
+        with c2:
+            app_id = st.text_input(
+                "Internal id",
+                placeholder="walmart_ca",
+                help="Lowercase snake_case. Used as CSV filename prefix and DB key.",
+            )
 
+        dropdown = st.text_input(
+            "Dropdown value",
+            placeholder="walmart_ca",
+            help=(
+                "The exact `value` attribute from the app-picker `<select>` on the "
+                "CedCommerce login page. Right-click the dropdown → Inspect to grab "
+                "it. Often identical to the internal id."
+            ),
+        )
 
-def _wizard_step_credentials(state: dict):
-    opt = state["selected_option"]
-    st.markdown(f"Adding **{opt['label']}** (dropdown value `{opt['value']}`).")
+        st.markdown("**Credentials for this admin panel**")
+        c3, c4 = st.columns(2)
+        with c3:
+            email = st.text_input("Email", placeholder="ops@cedcommerce.com")
+        with c4:
+            password = st.text_input("Password", type="password")
 
-    with st.form("creds_form"):
-        user = st.text_input("Admin panel email")
-        pw = st.text_input("Admin panel password", type="password")
-        submitted = st.form_submit_button("Next →")
-    if submitted:
-        if not user or not pw:
-            st.error("Both fields required.")
-            return
-        state["user"] = user.strip()
-        state["password"] = pw  # not stripped — passwords can legitimately have leading/trailing space? no, we strip in build_updated_creds
-        state["step"] = 3
-        st.rerun()
+        st.markdown("**What to scrape**")
+        c5, c6 = st.columns(2)
+        with c5:
+            wants_installs = st.checkbox("Seller installs", value=True)
+        with c6:
+            wants_uninstalls = st.checkbox("Uninstalls", value=True)
 
+        run_after = st.checkbox(
+            "Run a scrape right after adding",
+            value=True,
+            help="Dispatches the GitHub Actions workflow. Results land in ~3-5 min.",
+        )
 
-def _wizard_step_scrape_selection(state: dict):
-    st.markdown("What should we scrape for this app?")
-    installs = st.checkbox("Seller installs", value=True)
-    uninstalls = st.checkbox("Uninstalls", value=True)
-    app_id = st.text_input(
-        "Internal id",
-        value=state["selected_option"]["value"],
-        help="Used as the filename prefix (results/latest/<id>.csv) and the primary key in the unified dataset. Lowercase snake_case.",
+        with st.expander(
+            "Current CREDS bundle" + ("  (cached — expand only to override)" if cache_present else "  ← REQUIRED for first add"),
+            expanded=not cache_present,
+        ):
+            st.caption(
+                "GitHub secrets can be written but not read back. Paste the current "
+                "`CREDS` repo-secret body so we can append the new `APP_N_USER` / "
+                "`APP_N_PASS` lines without losing the existing apps."
+            )
+            creds_body = st.text_area(
+                "CREDS body",
+                value=st.session_state.get("_creds_cache", ""),
+                height=160,
+                label_visibility="collapsed",
+                placeholder="APP_1_USER=...\nAPP_1_PASS=...\nAPP_2_USER=...",
+            )
+
+        submitted = st.form_submit_button(
+            "Add admin panel", type="primary", use_container_width=True
+        )
+
+    if not submitted:
+        return
+
+    # --- Validation -----------------------------------------------------
+    errs: list[str] = []
+    if not name.strip():
+        errs.append("Friendly name is required.")
+    if not app_id.strip():
+        errs.append("Internal id is required.")
+    elif not all(c.islower() or c.isdigit() or c == "_" for c in app_id.strip()):
+        errs.append("Internal id must be lowercase snake_case (letters, digits, underscores).")
+    elif app_id.strip() in existing_ids:
+        errs.append(f"Internal id `{app_id.strip()}` already exists.")
+    if not dropdown.strip():
+        errs.append("Dropdown value is required.")
+    if not email.strip() or not password:
+        errs.append("Both email and password are required.")
+    if not (wants_installs or wants_uninstalls):
+        errs.append("Pick at least one of installs / uninstalls.")
+    if not creds_body.strip():
+        errs.append(
+            "Paste the current CREDS bundle (see the section above). "
+            "We need it to append new credentials without dropping existing ones."
+        )
+    if errs:
+        for e in errs:
+            st.error(e)
+        return
+
+    # --- Commit flow ----------------------------------------------------
+    _commit_new_app(
+        principal=principal,
+        name=name.strip(),
+        app_id=app_id.strip(),
+        dropdown=dropdown.strip(),
+        email=email.strip(),
+        password=password,
+        wants_installs=wants_installs,
+        wants_uninstalls=wants_uninstalls,
+        current_creds=creds_body,
+        run_after=run_after,
     )
 
-    if st.button("Next →"):
-        if not (installs or uninstalls):
-            st.error("Pick at least one of installs / uninstalls.")
-            return
-        state["scrape_installs"] = installs
-        state["scrape_uninstalls"] = uninstalls
-        state["app_id"] = app_id.strip()
-        state["step"] = 4
-        st.rerun()
 
+def _commit_new_app(
+    *,
+    principal: roles.UserPrincipal,
+    name: str,
+    app_id: str,
+    dropdown: str,
+    email: str,
+    password: str,
+    wants_installs: bool,
+    wants_uninstalls: bool,
+    current_creds: str,
+    run_after: bool,
+) -> None:
+    """Do the three GitHub writes + optional dispatch. Shows per-step status."""
+    try:
+        ctx = gh.context_from_streamlit(st)
+    except Exception as e:
+        st.error(str(e))
+        return
 
-def _wizard_step_dry_run(state: dict, principal):
-    st.markdown("Running a dry scrape to verify credentials and schema.")
-    st.caption(
-        "This loads one page of sellers (and optionally uninstalls) to "
-        "check login works and to compare the returned columns against "
-        "the canonical schema. We don't persist anything yet."
-    )
-    if st.button("Run dry scrape", type="primary"):
-        with st.spinner("Scraping one page..."):
-            try:
-                observed = _dry_scrape(state)
-            except Exception as e:
-                st.error(f"Dry scrape failed: {e}")
-                return
-        state["dry_observed"] = observed
+    creds_ref = app_registry.next_creds_ref()
 
-    observed = state.get("dry_observed")
-    if observed:
-        for kind, cols in observed.items():
-            report = schema_guard.compare(kind, cols)
-            st.markdown(schema_guard.format_report_markdown(report))
-            state.setdefault("reports", {})[kind] = report.status
-
-        # Decide schema_status for the app entry
-        statuses = list(state.get("reports", {}).values())
-        if "blocked" in statuses:
-            final = "blocked"
-            st.error("Schema is **blocked** — required columns missing. Fix the admin panel or align the canonical schema before onboarding.")
-        elif "pending_review" in statuses:
-            final = "pending_review"
-            st.warning("Schema will be saved as **pending_review** — a super admin must approve it before its rows enter the unified dataset.")
-        else:
-            final = "canonical"
-            st.success("Schema matches canonical — ready to merge on the next scrape.")
-        state["app_schema_status"] = final
-
-        if st.button("Next →", disabled=(final == "blocked")):
-            state["step"] = 5
-            st.rerun()
-
-
-def _wizard_step_commit(state: dict, principal):
-    st.markdown("Commit the new app to the repo and (optionally) kick off a scrape.")
-    st.write(
-        {
-            "app_id": state["app_id"],
-            "label": state["selected_option"]["label"],
-            "dropdown_value": state["selected_option"]["value"],
-            "scrape_installs": state["scrape_installs"],
-            "scrape_uninstalls": state["scrape_uninstalls"],
-            "schema_status": state.get("app_schema_status", "pending_review"),
-        }
-    )
-
-    run_after = st.checkbox("Trigger a scrape immediately after committing", value=True)
-
-    if st.button("Commit + deploy", type="primary"):
+    # 1. CREDS secret
+    with st.status("Updating CREDS secret…", expanded=False) as status:
         try:
-            ctx = gh.context_from_streamlit(st)
-        except Exception as e:
-            st.error(str(e))
-            return
-
-        creds_ref = app_registry.next_creds_ref()
-
-        # 1) Append credentials to CREDS secret.
-        try:
-            # Pull the latest CREDS body (we can't read a secret's current
-            # value back from GitHub, so we assume the editor has pre-loaded
-            # the current text into a text_area below if needed). For now we
-            # just encrypt JUST the additions — GitHub's PUT secret replaces,
-            # so we need the current body first. The Users tab super-admin
-            # view should bootstrap this text; for v1 we ask the editor to
-            # paste.
-            current_creds = st.session_state.get("_creds_cache")
-            if not current_creds:
-                st.error(
-                    "No cached CREDS body found. Ask a super admin to open the "
-                    "Users tab once so the app can read the current CREDS secret "
-                    "state via the GitHub API first."
-                )
-                return
-            additions = {
-                f"{creds_ref}_USER": state["user"],
-                f"{creds_ref}_PASS": state["password"],
-            }
-            new_body = gh.build_updated_creds(current_creds, additions)
+            new_body = gh.build_updated_creds(
+                current_creds,
+                {
+                    f"{creds_ref}_USER": email,
+                    f"{creds_ref}_PASS": password,
+                },
+            )
             gh.append_creds_lines(ctx, [new_body])
+            # Cache for next add in same session.
+            st.session_state["_creds_cache"] = new_body
+            status.update(label="CREDS secret updated", state="complete")
         except Exception as e:
-            st.error(f"Failed to update CREDS secret: {e}")
+            status.update(label="CREDS update failed", state="error")
+            st.error(f"Couldn't update CREDS secret: {e}")
             return
 
-        # 2) Append to apps.yaml via Contents API.
+    # 2. apps.yaml
+    with st.status("Committing apps.yaml…", expanded=False) as status:
         try:
-            now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+            import yaml
             entry = AppEntry(
-                id=state["app_id"],
-                label=state["selected_option"]["label"],
-                dropdown_value=state["selected_option"]["value"],
-                scrape_installs=state["scrape_installs"],
-                scrape_uninstalls=state["scrape_uninstalls"],
+                id=app_id,
+                label=name,
+                dropdown_value=dropdown,
+                scrape_installs=wants_installs,
+                scrape_uninstalls=wants_uninstalls,
                 creds_ref=creds_ref,
                 added_by=principal.email,
-                added_at=now,
-                schema_status=state.get("app_schema_status", "pending_review"),
+                added_at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                # First real scrape will flip this to canonical/pending_review/blocked.
+                schema_status="pending_review",
             )
-            # Read current apps.yaml, append, PUT back.
-            import yaml
             current_yaml = gh.read_file(ctx, "apps.yaml")
             data = yaml.safe_load(current_yaml or "") or {"schema_version": 1, "apps": []}
-            data.setdefault("apps", []).append({
-                k: v for k, v in entry.__dict__.items()
-            })
-            new_yaml = yaml.safe_dump(data, sort_keys=False)
-            msg = f"feat(registry): add admin panel {entry.id} ({roles.audit_stamp(principal.email, 'onboard app')})"
-            gh.put_file(ctx, "apps.yaml", new_yaml, msg)
+            data.setdefault("apps", []).append({k: v for k, v in entry.__dict__.items()})
+            gh.put_file(
+                ctx,
+                "apps.yaml",
+                yaml.safe_dump(data, sort_keys=False),
+                f"feat(registry): add admin panel {entry.id} "
+                f"({roles.audit_stamp(principal.email, 'onboard app')})",
+            )
+            status.update(label="apps.yaml committed", state="complete")
         except Exception as e:
-            st.error(f"Failed to commit apps.yaml: {e}")
+            status.update(label="apps.yaml commit failed", state="error")
+            st.error(
+                f"CREDS updated but apps.yaml commit failed: {e}. "
+                f"Check the repo — you may need to revert the CREDS secret."
+            )
             return
 
-        # 3) Optional workflow dispatch
-        if run_after:
-            try:
-                gh.trigger_scrape(ctx, reason=f"onboarding {entry.id} by {principal.email}")
-                st.success("Scrape dispatched. Check Actions → scrape-chap in ~3–5 min.")
-            except Exception as e:
-                st.warning(f"Committed but failed to dispatch scrape: {e}")
-                return
+    # 3. (optional) workflow dispatch
+    if run_after:
+        try:
+            gh.trigger_scrape(
+                ctx, reason=f"onboarding {entry.id} by {principal.email}"
+            )
+            dispatch_line = (
+                f" Scrape dispatched — check the Actions tab for results in "
+                f"~3-5 min."
+            )
+        except Exception as e:
+            dispatch_line = f" (Added, but scrape dispatch failed: {e})"
+    else:
+        dispatch_line = " Scrape will run at the next scheduled tick (00:00 / 12:00 IST)."
 
-        st.success(f"Added **{entry.label}** as `{entry.id}`. Streamlit Cloud will redeploy in ~30 s.")
-        st.session_state["_wizard"] = {"step": 1}
+    # Stash banner + rerun so the apps table above refreshes (Streamlit
+    # Cloud has a small delay before the redeploy picks up apps.yaml; the
+    # local app_registry read may still show the old list until then).
+    st.session_state["_add_app_success"] = (
+        f"✅ **{name}** added as `{entry.id}` (schema: pending_review until first scrape).{dispatch_line}"
+    )
+    st.rerun()
 
 
 # =================================================================
@@ -493,78 +487,6 @@ def _trigger_scrape_now(principal: roles.UserPrincipal) -> None:
         "Workflow dispatched. Fresh data should land in the dashboard in "
         "~3–5 minutes. Watch the GitHub Actions `scrape-chap` run for progress."
     )
-
-
-# =================================================================
-# Scraper hooks — isolated to keep heavy imports lazy
-# =================================================================
-def _discover_dropdown_options() -> list[dict]:
-    """Spawn a headless Chromium, go to LOGIN_URL, return the app-picker values."""
-    # Lazy-import — Streamlit Cloud may not have playwright installed.
-    from playwright.sync_api import sync_playwright
-    import config
-
-    login_url = config.LOGIN_URL
-    if not login_url:
-        raise RuntimeError("LOGIN_URL is not configured.")
-
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        ctx = browser.new_context()
-        page = ctx.new_page()
-        page.goto(login_url, wait_until="domcontentloaded")
-        # The login page uses an `inte-Select` for the app picker — we
-        # look for the hidden <select> fallback OR the visible list items.
-        options: list[dict] = []
-        try:
-            handle = page.query_selector("select[name='app'], select#app, select")
-            if handle:
-                raw = handle.evaluate(
-                    "(el) => Array.from(el.options).map(o => ({value: o.value, label: o.textContent.trim()}))"
-                )
-                options = [o for o in raw if o.get("value")]
-        except Exception:
-            pass
-        browser.close()
-    return options
-
-
-def _dry_scrape(state: dict) -> dict[str, list[str]]:
-    """Run scraper.scrape_one_app against the just-entered creds.
-
-    scraper.py today doesn't expose a public `scrape_one_app` — this is a
-    TODO integration point. For v1 we stub by reading the canonical
-    columns back so the wizard can complete end-to-end without a working
-    scrape API. The admin UI will surface a clear "dry scrape not yet
-    wired" note until scraper.py is updated.
-    """
-    try:
-        import scraper  # type: ignore
-        fn = getattr(scraper, "scrape_one_app_dry", None)
-        if callable(fn):
-            return fn(
-                app_id=state["app_id"],
-                dropdown_value=state["selected_option"]["value"],
-                user=state["user"],
-                password=state["password"],
-                wants_installs=state["scrape_installs"],
-                wants_uninstalls=state["scrape_uninstalls"],
-            )
-    except Exception as e:
-        raise RuntimeError(
-            f"Dry-scrape integration isn't wired yet (scraper.scrape_one_app_dry missing). "
-            f"Error: {e}"
-        )
-    # Fallback: pretend canonical so the wizard can be exercised.
-    canonical = schema_guard.load_canonical()
-    out = {}
-    if state["scrape_installs"]:
-        k = canonical["kinds"]["sellers"]
-        out["sellers"] = list(k["required_columns"]) + list(k["optional_columns"])
-    if state["scrape_uninstalls"]:
-        k = canonical["kinds"]["uninstalls"]
-        out["uninstalls"] = list(k["required_columns"]) + list(k["optional_columns"])
-    return out
 
 
 # =================================================================
