@@ -134,9 +134,15 @@ def _resolve_email(st) -> Optional[str]:
 
 
 def _resolve_email_native(st) -> Optional[str]:
-    """Use `st.login` + `st.experimental_user` if available."""
+    """Use `st.login` + `st.user` (1.42+) if available.
+
+    Streamlit 1.42 renamed the identity attribute from `st.experimental_user`
+    to `st.user`. On 1.56 (our pinned version) only `st.user` exists, so
+    reading `experimental_user` silently returned None and trapped us in
+    a login→redirect→login loop after successful OAuth.
+    """
     try:
-        user = getattr(st, "experimental_user", None)
+        user = getattr(st, "user", None) or getattr(st, "experimental_user", None)
         if user is None:
             return None
         is_logged_in = bool(getattr(user, "is_logged_in", False))
