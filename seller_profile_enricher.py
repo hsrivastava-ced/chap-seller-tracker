@@ -394,3 +394,87 @@ def _upsert_cached_profile(client, profile: SellerProfile) -> None:
     client._client.table("seller_profiles").upsert(
         profile.to_dict(), on_conflict="app_name,seller_id",
     ).execute()
+
+
+# ---------------------------------------------------------------------
+# Bulk enrichment — one-shot for an existing seller base.
+# ---------------------------------------------------------------------
+
+
+def bulk_enrich(
+    *,
+    sellers_by_app: dict[str, list[dict]],
+    supabase_client=None,
+    skip_cached: bool = True,
+    max_age_days: int = 30,
+    progress_cb=None,
+):
+    """Analyse every seller across the given apps, yielding progress.
+
+    Args:
+      sellers_by_app: {app_id: [row, row, ...]} — typically from the
+        current run.json. Each row must have `seller_id` and
+        `store_url` fields (the scraper already provides both).
+      supabase_client: optional SupabaseClient for caching. Lookups
+        are cheap (indexed by (app_name, seller_id)), so when
+        skip_cached=True we only hit Claude for sellers that don't
+        already have a fresh row.
+      skip_cached: when True (default), don't re-analyse sellers whose
+        cached row is newer than max_age_days. This is the "tokens
+        stay boring" knob — the user asked for bulk-once + incremental-
+        thereafter; skip_cached powers incremental.
+      max_age_days: cache TTL (default 30 days).
+      progress_cb: optional callable(done, total, last_profile) for
+        the UI to update a progress bar as each seller completes.
+
+    Returns a summary dict: {processed, claude_hits, cache_hits,
+    errors, total}. Never raises — per-seller failures are captured
+    in the returned profiles' `error` field.
+    """
+    # Flatten so we get a stable total + a single progress loop.
+    jobs = []
+    for app_name, rows in (sellers_by_app or {}).items():
+        for row in rows or []:
+            sid = (row.get("seller_id") or "").strip()
+            if not sid:
+                continue
+            jobs.append(
+                (app_name, sid, (row.get("store_url") or "").strip())
+            )
+
+    total = len(jobs)
+    stats = {
+        "total": total,
+        "processed": 0,
+        "claude_hits": 0,
+        "cache_hits": 0,
+        "errors": 0,
+    }
+    if total == 0:
+        return stats
+
+    for i, (app_name, seller_id, store_url) in enumerate(jobs, start=1):
+        profile = analyse_seller(
+            app_name=app_name,
+            seller_id=seller_id,
+            store_url=store_url,
+            supabase_client=supabase_client,
+            max_age_days=max_age_days,
+            force=not skip_cached,
+        )
+        stats["processed"] = i
+        if profile.source == "cache":
+            stats["cache_hits"] += 1
+        elif profile.source == "claude":
+            stats["claude_hits"] += 1
+        elif profile.source in ("error", "dry_run"):
+            # Dry-run counts as neither; errors yes.
+            if profile.source == "error":
+                stats["errors"] += 1
+        if progress_cb is not None:
+            try:
+                progress_cb(i, total, profile)
+            except Exception:
+                # Never let a UI-layer exception poison the loop.
+                pass
+    return stats

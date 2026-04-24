@@ -13,6 +13,7 @@ wrapper so it can also be imported by tests).
 """
 from __future__ import annotations
 
+import os
 from datetime import date
 from pathlib import Path
 from typing import Any
@@ -316,12 +317,148 @@ def main() -> None:
                 st.write("")
 
     st.divider()
+    _render_bulk_enrich_section(
+        principal=principal,
+        sellers_by_app_all=sellers_by_app,
+    )
+    st.divider()
     st.caption(
         "Coming next: day-over-day delta (what changed since the last "
         "scrape — new installs, plan changes, failed-order spikes), "
         "pulled directly from Supabase snapshots so nothing is lost "
         "when the admin panel drops a seller."
     )
+
+
+# ---------------------------------------------------------------------
+# Bulk enrichment — batch every seller for the selected apps so the
+# cache fills up in one go. After that, scrapes only pay Claude cost
+# for NEW seller_ids.
+# ---------------------------------------------------------------------
+
+
+def _render_bulk_enrich_section(
+    *,
+    principal,
+    sellers_by_app_all: dict[str, list[dict]],
+) -> None:
+    if not roles.can(principal, "approve_schema_drift"):
+        # Writes live data to Supabase + spends Claude tokens — gate to
+        # super-admin only.
+        return
+
+    with st.expander("🧠 Bulk AI enrichment (super-admin only)", expanded=False):
+        st.markdown(
+            "Run the AI business-analysis **once over every currently-"
+            "scraped seller** for the selected apps so the `seller_"
+            "profiles` table fills up in one pass. After this, only "
+            "net-new sellers hit Claude on subsequent scrapes — keeps "
+            "the token bill flat."
+        )
+
+        # Multiselect of apps — user said "both SHEIN apps + both TEMU
+        # apps", so let them pick any combination.
+        available = sorted(
+            [a for a, rows in sellers_by_app_all.items() if rows]
+        )
+        if not available:
+            st.info("No scraped data to enrich yet.")
+            return
+        picked = st.multiselect(
+            "Apps to enrich",
+            options=available,
+            default=available,
+            format_func=display_name,
+            help="Every seller row under these apps will be analysed "
+                 "(or skipped if already cached within the last 30 days).",
+        )
+
+        skip_cached = st.checkbox(
+            "Skip sellers already in the cache",
+            value=True,
+            help="When on, only NEW sellers (or ones whose cached row "
+                 "is older than 30 days) hit Claude. This is the "
+                 "incremental mode — safe to re-run daily.",
+        )
+
+        # Estimate-ahead: show how many Claude calls this would make.
+        total_rows = sum(
+            len(sellers_by_app_all.get(a, []) or []) for a in picked
+        )
+        st.caption(
+            f"Scope: **{total_rows:,}** seller rows across "
+            f"{len(picked)} app(s). With `skip_cached=True`, the actual "
+            f"Claude calls will be (total − already-cached)."
+        )
+
+        if st.button("Run bulk enrichment", type="primary", key="bulk_enrich"):
+            if not picked:
+                st.warning("Pick at least one app.")
+                return
+            key = os.environ.get("ANTHROPIC_API_KEY") or (
+                st.secrets.get("ANTHROPIC_API_KEY", "")
+                if hasattr(st, "secrets") else ""
+            )
+            if not key:
+                st.error(
+                    "ANTHROPIC_API_KEY isn't set in Streamlit secrets. "
+                    "The batch would run in dry-run mode and produce no "
+                    "useful analysis. Add the key first, reboot, retry."
+                )
+                return
+            # Streamlit secrets values don't propagate to os.environ
+            # automatically — the enricher reads os.getenv, so copy.
+            os.environ["ANTHROPIC_API_KEY"] = str(key)
+
+            sb = SupabaseClient()
+            if sb.dry_run:
+                st.error(
+                    "Supabase client is in dry-run mode (creds missing "
+                    "or supabase-py not installed). Bulk enrichment "
+                    "needs a live Supabase connection to cache results."
+                )
+                return
+
+            # Narrow sellers_by_app to the picked subset.
+            scope = {a: sellers_by_app_all.get(a, []) or [] for a in picked}
+
+            progress = st.progress(0, text="Starting…")
+            live_stats = st.empty()
+
+            def _cb(done, total, profile):
+                pct = int(done * 100 / max(total, 1))
+                progress.progress(
+                    pct,
+                    text=f"{done:,} / {total:,} · last: "
+                         f"{profile.store_url or profile.seller_id} "
+                         f"({profile.source})",
+                )
+                live_stats.caption(
+                    f"Latest · business_type={profile.business_type} · "
+                    f"source={profile.source}"
+                )
+
+            with st.spinner("Enriching…"):
+                stats = spe.bulk_enrich(
+                    sellers_by_app=scope,
+                    supabase_client=sb,
+                    skip_cached=skip_cached,
+                    progress_cb=_cb,
+                )
+
+            progress.progress(100, text="Done.")
+            st.success(
+                f"✅ Finished. Processed {stats['processed']:,} / "
+                f"{stats['total']:,} — "
+                f"🧠 {stats['claude_hits']:,} fresh AI calls · "
+                f"💾 {stats['cache_hits']:,} cache hits · "
+                f"⚠️ {stats['errors']:,} errors."
+            )
+            st.caption(
+                "All results are cached in `public.seller_profiles`. "
+                "The **🔍 Analyse business** buttons above now return "
+                "instantly for every row (source = cache)."
+            )
 
 
 # ---------------------------------------------------------------------
