@@ -24,6 +24,8 @@ import streamlit as st
 import auth
 import roles
 import customer_intelligence as ci
+import seller_delta
+import seller_delta_source
 import seller_profile_enricher as spe
 from analytics_advanced import (
     DISPLAY_NAMES,
@@ -38,6 +40,7 @@ from ui_theme import apply_shared_theme
 
 ROOT = Path(__file__).parent
 LATEST_RUN_FILE = ROOT / "results" / "latest" / "run.json"
+HISTORY_DIR = ROOT / "results" / "history"
 
 
 # ---------------------------------------------------------------------
@@ -133,32 +136,96 @@ def _download_csv(df: pd.DataFrame, filename: str) -> None:
 # ---------------------------------------------------------------------
 
 
-def _render_sidebar(available_apps: list[str]) -> str:
+def _render_sidebar(available_apps: list[str], *, principal=None) -> str:
+    """Sidebar designed to match a real CRM's info-density — uniform
+    cards for brand / nav / user / filters so the visual rhythm stays
+    consistent down the column. Brand colors mirror Threecolts
+    (indigo) + CedCommerce (violet accent)."""
     with st.sidebar:
+        # ---- BRAND CARD --------------------------------------------
         st.markdown(
-            '<div class="sidebar-brand">cHAP <span class="sidebar-brand-accent">'
-            'Customer</span> Intelligence</div>'
-            '<div class="sidebar-tagline">For sales reps</div>',
+            '<div style="padding:14px 16px; border-radius:10px; '
+            'background:linear-gradient(135deg, #4f46e5 0%, #7c3aed 100%); '
+            'color:#f8fafc; margin-bottom:12px;">'
+            '<div style="font-size:0.66rem; letter-spacing:0.12em; '
+            'text-transform:uppercase; opacity:0.85;">CedCommerce · Threecolts</div>'
+            '<div style="font-size:1.15rem; font-weight:700; '
+            'margin-top:4px; line-height:1.15;">cHAP Customer Intelligence</div>'
+            '<div style="font-size:0.72rem; opacity:0.8; margin-top:2px;">'
+            'For Business Development reps</div>'
+            '</div>',
             unsafe_allow_html=True,
         )
 
+        # ---- USER CARD ---------------------------------------------
+        if principal is not None:
+            role_color = {
+                "super_admin": "#f59e0b",
+                "editor": "#10b981",
+                "viewer": "#64748b",
+            }.get(principal.role, "#94a3b8")
+            st.markdown(
+                f'<div style="padding:12px 14px; border-radius:10px; '
+                f'background:#0f172a; border:1px solid #334155; '
+                f'margin-bottom:12px;">'
+                f'<div style="display:flex; align-items:center; gap:10px;">'
+                f'<div style="width:34px; height:34px; border-radius:50%; '
+                f'background:linear-gradient(135deg, #6366f1, #a855f7); '
+                f'color:white; font-weight:700; font-size:0.95rem; '
+                f'display:flex; align-items:center; justify-content:center;">'
+                f'{principal.email[0].upper()}</div>'
+                f'<div style="min-width:0; flex:1;">'
+                f'<div style="color:#e2e8f0; font-size:0.82rem; '
+                f'font-weight:600; white-space:nowrap; overflow:hidden; '
+                f'text-overflow:ellipsis;">{principal.email}</div>'
+                f'<div style="color:{role_color}; font-size:0.68rem; '
+                f'font-weight:700; text-transform:uppercase; letter-spacing:0.06em;'
+                f'">{principal.role}</div>'
+                f'</div></div></div>',
+                unsafe_allow_html=True,
+            )
+
+        # ---- FILTERS CARD ------------------------------------------
         st.markdown(
-            '<div class="sidebar-section">Filters</div>',
+            '<div style="padding:14px; border-radius:10px; '
+            'background:#1e293b; border:1px solid #334155; '
+            'margin-bottom:12px;">'
+            '<div style="color:#94a3b8; font-size:0.68rem; '
+            'font-weight:700; letter-spacing:0.1em; '
+            'text-transform:uppercase; margin-bottom:10px;">🎯 Filters</div>',
             unsafe_allow_html=True,
         )
 
         if not available_apps:
             st.info("No scraped data yet. Run a scrape from Admin → Overview.")
+            st.markdown("</div>", unsafe_allow_html=True)
             return ""
 
-        # Single-select: each bucket table is app-scoped. The user said
-        # "we will choose the app" — singular.
+        # Single-select: each bucket table is app-scoped.
         pick_idx = st.selectbox(
             "App",
             options=list(range(len(available_apps))),
             format_func=lambda i: display_name(available_apps[i]),
             help="Pick the app whose sellers you want to work today.",
         )
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        # ---- FOOTER CARD -------------------------------------------
+        st.markdown(
+            '<div style="padding:10px 14px; border-radius:10px; '
+            'background:#0f172a; border:1px solid #334155; '
+            'margin-top:10px;">'
+            '<div style="color:#64748b; font-size:0.66rem; '
+            'font-weight:700; letter-spacing:0.1em; '
+            'text-transform:uppercase;">Data source</div>'
+            '<div style="color:#cbd5e1; font-size:0.8rem; margin-top:4px;">'
+            'cHAP admin panel · Supabase cache</div>'
+            '<div style="color:#94a3b8; font-size:0.7rem; margin-top:2px;">'
+            'Auto-syncs 00:00 + 12:00 IST</div>'
+            '</div>',
+            unsafe_allow_html=True,
+        )
+
         return available_apps[pick_idx]
 
 
@@ -204,7 +271,7 @@ def main() -> None:
     available_apps = sorted(
         [a for a, rows in sellers_by_app.items() if rows]
     )
-    app_key = _render_sidebar(available_apps)
+    app_key = _render_sidebar(available_apps, principal=principal)
     if not app_key:
         return
 
@@ -283,6 +350,9 @@ def main() -> None:
     # scream about 0s — reps only see actionable work by default.
     active = [b for b in buckets if b.count > 0]
     inactive = [b for b in buckets if b.count == 0]
+
+    # ---- Day-over-day delta feed ------------------------------------
+    _render_delta_feed(app_key=app_key)
 
     tab_labels = [f"{b.title}  ·  {b.count}" for b in active]
     tabs = st.tabs(tab_labels)
@@ -909,5 +979,180 @@ def _render_demo_profile_card(p: dict) -> None:
         f'<div style="margin-top:8px; color:#a5b4fc; font-size:0.92rem; '
         f'line-height:1.5;"><b>Opportunity:</b> {p["opportunity"]}</div>'
         f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+# =====================================================================
+# Day-over-day delta feed — what changed since the previous scrape.
+# Powered by seller_delta + seller_delta_source; reads Supabase first
+# (so churned sellers — who cHAP's own UI has forgotten — are still
+# traceable), falls back to local results/history.
+# =====================================================================
+
+
+_DELTA_STYLE = {
+    "new_install":        ("🟢", "#10b981", "New install"),
+    "churned":            ("🔴", "#ef4444", "Churned"),
+    "plan_upgrade":       ("⬆️", "#6366f1", "Upgraded to paid"),
+    "plan_downgrade":     ("⬇️", "#f59e0b", "Dropped to free"),
+    "plan_change":        ("🔄", "#8b5cf6", "Plan changed"),
+    "order_spike":        ("📈", "#10b981", "Order spike"),
+    "failed_order_spike": ("⚠️", "#ef4444", "Failures rising"),
+}
+
+
+def _render_delta_feed(*, app_key: str) -> None:
+    """Show a timeline of changes between the most recent scrape and
+    the one before it — the "seller movement" view.
+
+    Critical for BD reps: cHAP's own admin panel drops seller detail
+    the moment they uninstall, but our Supabase snapshots still have
+    their full profile. The Churned events here remember the orders /
+    products / plan of sellers who've already vanished from cHAP.
+    """
+    sb = SupabaseClient()
+    prior_stamp, latest_stamp, prior_rows, latest_rows = (
+        seller_delta_source.from_supabase(sb, app_name=app_key)
+    )
+
+    # If Supabase has < 2 rows for this app (e.g. this app was just
+    # onboarded), try local history as a secondary source.
+    if not prior_rows or not latest_rows:
+        p_stamp, l_stamp, p_rows, l_rows = (
+            seller_delta_source.from_local_history(
+                HISTORY_DIR, app_name=app_key
+            )
+        )
+        if p_rows and l_rows:
+            prior_stamp, latest_stamp = p_stamp, l_stamp
+            prior_rows, latest_rows = p_rows, l_rows
+
+    if not prior_rows or not latest_rows:
+        with st.expander(
+            "⚡ What changed (day-over-day) · no prior snapshot yet",
+            expanded=False,
+        ):
+            st.caption(
+                "Needs two scraped runs to compare. The next scheduled "
+                "scrape (00:00 IST or 12:00 IST) will create the second "
+                "snapshot, and this feed lights up automatically on the "
+                "next page reload."
+            )
+        return
+
+    events = seller_delta.compute_events(app_key, prior_rows, latest_rows)
+    counts = seller_delta.summarise(events)
+
+    # Headline strip — counts per kind.
+    def _pill(kind: str) -> str:
+        emoji, color, label = _DELTA_STYLE.get(kind, ("·", "#94a3b8", kind))
+        n = counts.get(kind, 0)
+        if not n:
+            return ""
+        return (
+            f'<span style="display:inline-block; padding:4px 12px; '
+            f'margin:0 8px 4px 0; border-radius:14px; '
+            f'background:rgba(148,163,184,0.12); border:1px solid '
+            f'rgba(148,163,184,0.25); color:{color}; font-size:0.82rem; '
+            f'font-weight:600;">{emoji} {label} · {n}</span>'
+        )
+    strip = "".join(_pill(k) for k in _DELTA_STYLE.keys() if counts.get(k))
+    if not strip:
+        strip = (
+            '<span style="color:#94a3b8; font-size:0.88rem;">'
+            'No movement between the last two scrapes — every seller '
+            'held steady.</span>'
+        )
+
+    with st.expander(
+        f"⚡ What changed (day-over-day) · {len(events)} events",
+        expanded=len(events) > 0,
+    ):
+        st.markdown(
+            f'<div style="color:#94a3b8; font-size:0.8rem; '
+            f'margin-bottom:10px;">Comparing <b>{latest_stamp or "latest"}</b> '
+            f'vs <b>{prior_stamp or "prior"}</b></div>{strip}',
+            unsafe_allow_html=True,
+        )
+
+        if not events:
+            st.info(
+                "No flagged changes this cycle. Reps: no follow-up "
+                "events to action; check the buckets below for "
+                "steady-state outreach work."
+            )
+            return
+
+        st.write("")
+        # Render up to 40 events, newest-kind-first (groups of the
+        # same kind stay clustered). Reps scan this as a timeline.
+        kind_order = list(_DELTA_STYLE.keys())
+        events_sorted = sorted(
+            events,
+            key=lambda e: (
+                kind_order.index(e.kind) if e.kind in kind_order else 99,
+                -(e.value_after or 0),
+            ),
+        )
+        for ev in events_sorted[:40]:
+            _render_delta_event_card(ev)
+        if len(events) > 40:
+            st.caption(
+                f"+ {len(events) - 40} more events. Run a query on "
+                "`public.snapshots` for the full diff, or narrow the "
+                "app in the sidebar."
+            )
+
+
+def _render_delta_event_card(ev) -> None:
+    """One row per event — dark card with left color-bar."""
+    emoji, color, label = _DELTA_STYLE.get(ev.kind, ("·", "#94a3b8", ev.kind))
+    # Plan change sub-line.
+    plan_line = ""
+    if ev.plan_before or ev.plan_after:
+        if ev.kind in ("plan_upgrade", "plan_downgrade", "plan_change"):
+            plan_line = (
+                f'<span style="color:#94a3b8;">plan:</span> '
+                f'<b>{ev.plan_before or "—"} → {ev.plan_after or "—"}</b>'
+            )
+        elif ev.plan_after:
+            plan_line = f'<span style="color:#94a3b8;">plan:</span> <b>{ev.plan_after}</b>'
+        elif ev.plan_before:
+            plan_line = f'<span style="color:#94a3b8;">was on:</span> <b>{ev.plan_before}</b>'
+
+    # Magnitude sub-line.
+    mag_line = ""
+    if ev.value_before is not None and ev.value_after is not None:
+        delta = ev.value_after - ev.value_before
+        sign = "+" if delta > 0 else ""
+        mag_line = (
+            f'<span style="color:#94a3b8;">count:</span> '
+            f'<b>{ev.value_before} → {ev.value_after}</b> '
+            f'<span style="color:{color};">({sign}{delta})</span>'
+        )
+
+    meta_bits = [x for x in (plan_line, mag_line) if x]
+    meta_line = "  ·  ".join(meta_bits)
+
+    identity = ev.store_url or ev.username or ev.email or ev.seller_id
+
+    st.markdown(
+        f'<div style="display:flex; gap:12px; padding:10px 14px; '
+        f'margin:6px 0; border-radius:8px; background:#0f172a; '
+        f'border-left:4px solid {color};">'
+        f'<div style="font-size:1.25rem; line-height:1;">{emoji}</div>'
+        f'<div style="flex:1; min-width:0;">'
+        f'<div style="color:#e2e8f0; font-size:0.92rem; '
+        f'font-weight:600;">{label}'
+        f'<span style="color:#64748b; font-weight:400;"> · </span>'
+        f'<span style="color:#cbd5e1; font-weight:500;">{identity}</span>'
+        f'</div>'
+        + (
+            f'<div style="color:#94a3b8; font-size:0.8rem; '
+            f'margin-top:3px;">{meta_line}</div>'
+            if meta_line else ""
+        )
+        + f'</div></div>',
         unsafe_allow_html=True,
     )
