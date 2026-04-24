@@ -14,6 +14,14 @@
 #              file to match the new reality (via the admin-UI drift
 #              approval flow).
 #
+#              IMPORTANT: only list a column here if it appears as a
+#              TOGGLEABLE checkbox in the popup. Permanent table columns
+#              (Action, Seller Id, Username on cHAP today) live in the
+#              table header but NOT in the popup — they cannot be hidden,
+#              and listing them here makes every run wrongly block. Their
+#              presence is enforced separately by the row-extraction step
+#              (header-map check in `_scrape_paginated_ant_table`).
+#
 #   optional — known-good labels that may or may not appear. Present →
 #              they get ticked. Absent → fine, life goes on.
 #
@@ -32,14 +40,16 @@
 schema_version: 1
 
 default:
+  # Columns that show up as TOGGLEABLE checkboxes in the popup. The
+  # always-on table columns (Action, Seller Id, Username) used to live
+  # here too — moved out 2026-04-25 because cHAP doesn't expose them as
+  # popup checkboxes (they're permanent), so listing them was blocking
+  # every scheduled scrape on a false positive.
   required:
-    - "Seller Id"
     - "Store Url"
-    - "Username"
     - "Email Id"
     - "Installed On"
     - "Marketplace/Platform Connected"
-    - "Action"
   optional:
     - "App Type"
     - "Source Country"

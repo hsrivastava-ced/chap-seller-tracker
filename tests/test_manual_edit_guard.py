@@ -17,9 +17,18 @@ import types
 from pathlib import Path
 
 # Stub config so supabase_client.py imports cleanly without real env vars.
+# Set every attr any sibling test (e.g. test_scrape_guardrail) might need —
+# pytest collection runs all test modules into the same interpreter, so
+# `setdefault` here would otherwise win the race and starve the other test.
 _cfg = types.ModuleType("config")
 _cfg.SUPABASE_URL = ""
 _cfg.SUPABASE_KEY = ""
+_cfg.APP_IDS = {}
+_cfg.LOGIN_URL = ""
+_cfg.USERNAME = ""
+_cfg.PASSWORD = ""
+_cfg.HEADLESS = True
+_cfg.CREDENTIALS = {}
 sys.modules.setdefault("config", _cfg)
 
 REPO_ROOT = Path(__file__).resolve().parent.parent

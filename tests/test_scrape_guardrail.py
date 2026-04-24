@@ -41,8 +41,8 @@ import scrape_validator as sv   # noqa: E402
 # Helpers
 # -----------------------------------------------------------------------
 REQUIRED_LABELS = [
-    "Seller Id", "Store Url", "Username", "Email Id", "Installed On",
-    "Marketplace/Platform Connected", "Action",
+    "Store Url", "Email Id", "Installed On",
+    "Marketplace/Platform Connected",
 ]
 
 
@@ -88,8 +88,8 @@ def test_clean_run_is_promotable():
 
 def test_missing_required_column_blocks():
     _isolated_results_dir()
-    # Drop "Seller Id" — a required column — from observed labels.
-    observed = [l for l in REQUIRED_LABELS if l != "Seller Id"]
+    # Drop "Store Url" — a required column — from observed labels.
+    observed = [l for l in REQUIRED_LABELS if l != "Store Url"]
     rep = sv.validate_app(
         app_name="shein", kind="sellers",
         observed_grid_labels=observed,

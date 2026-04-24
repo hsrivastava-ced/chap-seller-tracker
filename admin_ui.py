@@ -650,9 +650,8 @@ jobs:
           python - <<'PY'
           import os, json, sys, secrets as _secrets
           data = json.loads(os.environ.get("SECRETS_JSON") or "{{}}")
-          required = ["LOGIN_URL", "{app_id.upper()}_USER_placeholder", "{app_id.upper()}_PASS_placeholder"]
-          # Derive the real required keys from apps.yaml so this file
-          # doesn't hardcode APP_N_* for the specific app.
+          # Derive the required keys from apps.yaml so this file doesn't
+          # hardcode the per-app secret prefix (APP_N_*).
           import yaml
           try:
               registry = yaml.safe_load(open("apps.yaml")) or {{}}

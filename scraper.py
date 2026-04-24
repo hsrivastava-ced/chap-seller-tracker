@@ -418,88 +418,170 @@ def _ensure_framework_filter_is_all(page, app_id: str) -> None:
     """
     from playwright.sync_api import TimeoutError as PwTimeout
 
-    # Candidates: every inte-Select header inside the main content
-    # (NOT the sidebar nav). The framework dropdown sits above the
-    # sellers table.
-    headers = page.locator("main .inte-Select__Select--Header")
-    count = headers.count()
+    # The framework + app dropdowns live in the topbar (NOT main).
+    # Each dropdown is rendered as:
+    #   <div class="inte-formElement inte-select custom-select--style ...">
+    #     <span class="inte__Select--Selected">shopify</span>
+    #     ...
+    #     <ul class="inte-select-options">
+    #       <li class="inte-Select__Select--Item" value="all">all</li>
+    #       <li class="... inte-Select__Select--ItemSelected" value="shopify">shopify</li>
+    #     </ul>
+    #   </div>
+    # We scan every such select on the page, identify the one whose
+    # currently-selected text matches a known framework, and click it.
+    selects = page.locator("div.inte-formElement.inte-select.custom-select--style")
+    count = selects.count()
     if count == 0:
+        # Fallback: drop the custom-select--style modifier — some panels
+        # may render the same control under a slightly different class.
+        selects = page.locator("div.inte-formElement.inte-select")
+        count = selects.count()
+    if count == 0:
+        logging.info(
+            f"🧭 framework filter: no inte-formElement.inte-select dropdown "
+            f"on the seller page for {app_id} — nothing to flip."
+        )
         return
 
-    target_header = None
+    seen_values: list[str] = []
+    target_select = None
+    target_text = None
+    early_all = False
+    FRAMEWORK_VALUES = {
+        "shopify", "prestashop", "woocommerce", "magento",
+        "bigcommerce", "wix", "squarespace",
+    }
     for i in range(count):
-        h = headers.nth(i)
+        sel = selects.nth(i)
+        # Read the visible value from the inner Selected span. Falls
+        # back to inner_text on the whole select if the span is missing.
         try:
-            text = (h.inner_text() or "").strip().lower()
+            sp = sel.locator(".inte__Select--Selected").first
+            text = (sp.inner_text() or "").strip().lower() if sp.count() else ""
+            if not text:
+                text = (sel.inner_text() or "").strip().lower()
         except Exception:
             continue
-        # If this header's visible value is already "all", nothing to do.
+        seen_values.append(text or "<empty>")
         if text == "all":
-            target_header = None
-            break
-        # A single-word value that doesn't equal "all" is almost certainly
-        # the framework filter (shopify / prestashop / woocommerce / …).
-        # The target-app dropdown reads like "shein" / "temu" which are
-        # app identifiers, not framework names — those stay untouched.
-        FRAMEWORK_VALUES = {
-            "shopify", "prestashop", "woocommerce", "magento",
-            "bigcommerce", "wix", "squarespace",
-        }
+            early_all = True
+            # Don't break — there may still be a framework select after this
+            # (e.g. pagination per-page dropdown reads "all"). Keep scanning.
+            continue
         if text in FRAMEWORK_VALUES:
-            target_header = h
+            target_select = sel
+            target_text = text
             break
 
-    if target_header is None:
-        return  # already 'all', or no framework filter present
+    if target_select is None:
+        if early_all:
+            logging.info(
+                f"🧭 framework filter: already on 'all' for {app_id} "
+                f"(seen={seen_values}). No flip needed."
+            )
+        else:
+            logging.info(
+                f"🧭 framework filter: no framework dropdown matched for "
+                f"{app_id} (seen={seen_values}). No flip needed."
+            )
+        return
+
+    # Open the dropdown so we can enumerate + click the 'all' option.
+    try:
+        target_select.scroll_into_view_if_needed()
+        sp_probe = target_select.locator(".inte__Select--Selected").first
+        if sp_probe.count():
+            sp_probe.click()
+        else:
+            target_select.click()
+        page.wait_for_selector(
+            "li.inte-Select__Select--Item:visible",
+            timeout=8000,
+        )
+    except Exception as err:
+        logging.warning(
+            f"framework filter: couldn't open dropdown for {app_id} "
+            f"({err}); leaving on default."
+        )
+        return
+
+    # Log the visible options so we can confirm what cHAP exposed (useful
+    # when adding new apps like TikTok that we expect to see multiple
+    # frameworks for).
+    option_items = page.locator("li.inte-Select__Select--Item:visible")
+    option_count = option_items.count()
+    option_values: list[str] = []
+    for i in range(option_count):
+        try:
+            v = (option_items.nth(i).get_attribute("value") or "").strip().lower()
+            if v:
+                option_values.append(v)
+        except Exception:
+            continue
+    framework_options = [v for v in option_values if v in FRAMEWORK_VALUES]
+    logging.info(
+        f"🧭 framework filter: dropdown options for {app_id} = "
+        f"{option_values} (frameworks: {framework_options})"
+    )
 
     logging.info(
         f"🧭 Flipping framework filter to 'all' for {app_id} "
-        f"(was '{text}') so cross-framework sellers aren't dropped."
+        f"(was '{target_text}', seen={seen_values}, frameworks="
+        f"{framework_options})."
     )
-    try:
-        target_header.scroll_into_view_if_needed()
-        target_header.click()
-    except Exception as err:
-        logging.debug(f"framework header click failed: {err}")
-        return
-
-    # The dropdown popup should surface an option with value/text 'all'.
-    try:
-        page.wait_for_selector(
-            "li.inte-Select__Select--Item",
-            timeout=6000,
-            state="visible",
-        )
-    except PwTimeout:
-        logging.debug("framework options panel didn't open")
-        return
-
-    # Prefer value="all"; fall back to the option whose visible text is 'all'.
-    all_option = page.locator("li.inte-Select__Select--Item[value='all']").first
-    if all_option.count() == 0:
-        # Hunt by visible text instead.
+    # The dropdown is already open from the probe step above — go
+    # straight to clicking the "all" option.
+    all_option = target_select.locator(
+        "li.inte-Select__Select--Item[value='all']"
+    ).first
+    if all_option.count() == 0 or not all_option.is_visible():
         all_option = page.locator(
-            "li.inte-Select__Select--Item:has-text('all')"
+            "li.inte-Select__Select--Item[value='all']:visible"
         ).first
     if all_option.count() == 0:
-        logging.debug("no 'all' option in framework dropdown")
+        all_option = page.locator(
+            "li.inte-Select__Select--Item:visible:has-text('all')"
+        ).first
+    if all_option.count() == 0:
+        logging.warning("no 'all' option found inside the framework dropdown")
         return
 
     try:
         all_option.click()
     except Exception as err:
-        logging.debug(f"selecting 'all' failed: {err}")
+        logging.warning(f"selecting 'all' failed: {err}")
         return
 
-    # Give the seller table a beat to re-query. The row set may shrink
-    # OR grow depending on the framework mix — both are fine.
-    page.wait_for_timeout(800)
+    # Wait for the table to actually finish re-rendering after the flip.
+    # cHAP shows an Ant Design loading spinner (`.ant-spin-spinning`)
+    # while it re-queries; reading pagination state before the spinner
+    # disappears yields stale counts (e.g. "1 total page" while the
+    # actual filtered total is 84 → 5 pages). We wait for the spinner
+    # to disappear, falling back to a fixed pause if no spinner ever
+    # appeared (some apps don't render one for a same-app filter flip).
+    try:
+        page.wait_for_selector(
+            ".ant-spin-spinning",
+            state="visible",
+            timeout=2500,
+        )
+        logging.debug(f"   ↳ saw loading spinner for {app_id}; waiting for it to clear.")
+        page.wait_for_selector(
+            ".ant-spin-spinning",
+            state="hidden",
+            timeout=15000,
+        )
+    except PwTimeout:
+        # No spinner observed — give the network a moment regardless.
+        page.wait_for_timeout(1500)
+
+    # Belt-and-braces: re-confirm the table has rows before we hand off
+    # to the row scraper. Empty result is non-fatal; downstream pagination
+    # already handles "no rows" cleanly.
     try:
         page.wait_for_selector("tr.ant-table-row", timeout=10000)
     except PwTimeout:
-        # Occasionally 'all' produces zero rows (app with only one
-        # framework that's now deselected). Not fatal; scraper's
-        # empty-table path handles it.
         pass
     logging.info(f"   ↳ framework filter now 'all' for {app_id}.")
 
