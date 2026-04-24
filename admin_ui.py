@@ -352,6 +352,27 @@ def _commit_new_app(
         )
         return
 
+    # SAFETY: GitHub can't read CREDS back, so every put is a full replace.
+    # If the cached bundle doesn't cover every already-registered app,
+    # committing now would overwrite the secret and strand those apps.
+    # This check is belt-and-braces on top of the live preview warning
+    # in the vault section.
+    missing = _vault_missing_apps_for(current_creds)
+    if missing:
+        show_error(
+            "Can't add this app — your cached CREDS bundle is missing "
+            f"credentials for already-registered app(s): "
+            f"{', '.join('`'+m+'`' for m in missing)}. Saving now would "
+            "overwrite the GitHub secret and drop those apps' credentials.",
+            hint=(
+                "Go to **Settings → Credential vault → Replace bundle** "
+                "and paste the COMPLETE current CREDS body (all `APP_*_USER` "
+                "and `APP_*_PASS` lines together). The live preview will "
+                "confirm coverage before you unlock."
+            ),
+        )
+        return
+
     creds_ref = app_registry.next_creds_ref()
 
     # 1. CREDS secret
@@ -857,6 +878,26 @@ def _group_creds_by_app(valid: dict) -> dict[str, list[str]]:
     return out
 
 
+def _vault_missing_apps_for(creds_body: str) -> list[str]:
+    """Return a list of registered-app IDs whose USER/PASS pair is NOT
+    fully present in `creds_body`. Empty list == safe to commit.
+
+    Used by both the vault live-preview (warning) and _commit_new_app
+    (hard block). Prevents the "paste partial CREDS → put overwrites
+    GitHub secret → existing apps lose creds" data-loss path.
+    """
+    parsed = _parse_creds_with_errors(creds_body or "")
+    apps_map = _group_creds_by_app(parsed["valid"])
+    missing: list[str] = []
+    for app in app_registry.all_apps():
+        if not app.creds_ref:
+            continue
+        have = set(apps_map.get(app.creds_ref, []))
+        if have != {"USER", "PASS"}:
+            missing.append(app.id)
+    return missing
+
+
 def _render_vault_section(principal: roles.UserPrincipal) -> None:
     """Show vault status + an inline paste editor with live validation."""
     cached = st.session_state.get("_creds_cache", "")
@@ -933,10 +974,31 @@ def _render_vault_section(principal: roles.UserPrincipal) -> None:
             pieces = [f"**{app_count} app(s)**", f"{len(valid)} entries"]
             if apps_map.get("_extras"):
                 pieces.append(f"{len(apps_map['_extras'])} extras")
-            st.success(
-                "✅ Looks good — " + ", ".join(pieces) + ". "
-                "Click **Unlock vault** below to cache."
-            )
+
+            # Cross-check against apps.yaml: every registered app needs
+            # both USER and PASS in this paste. Missing ones would get
+            # wiped on the next put, so warn loudly.
+            missing = _vault_missing_apps_for(body)
+            if missing:
+                show_warning(
+                    "⚠️ This paste is missing credentials for already-"
+                    "registered app(s). Unlocking and then adding a new app "
+                    "would **overwrite the GitHub `CREDS` secret** and drop "
+                    "these apps' credentials:",
+                    hint=(
+                        "\n".join(f"• `{m}`" for m in missing)
+                        + "\n\nCopy the full current CREDS body from GitHub "
+                        "(Settings → Secrets → edit `CREDS` to re-view) and "
+                        "include ALL `APP_*_USER` / `APP_*_PASS` lines before "
+                        "unlocking."
+                    ),
+                )
+            else:
+                st.success(
+                    "✅ Looks good — " + ", ".join(pieces) + ". "
+                    "Coverage matches every app in `apps.yaml`. "
+                    "Click **Unlock vault** below to cache."
+                )
 
     c1, c2, _ = st.columns([1, 1, 3])
     with c1:

@@ -162,12 +162,22 @@ jobs:
                       parsed[k] = v
 
           # Preflight: fail loudly if anything critical is still missing.
-          required = [
-              "LOGIN_URL",
-              "APP_1_ID", "APP_1_USER", "APP_1_PASS",
-              "APP_2_ID", "APP_2_USER", "APP_2_PASS",
-              "APP_3_ID", "APP_3_USER", "APP_3_PASS",
-          ]
+          # Derived from apps.yaml so the list grows automatically as
+          # admins onboard new panels through the UI. _ID env vars are NO
+          # LONGER required — apps.yaml stores dropdown_value directly,
+          # and app_registry.credentials_for() only reads _USER / _PASS.
+          import yaml
+          try:
+              registry = yaml.safe_load(open("apps.yaml")) or {}
+          except Exception as err:
+              print(f"::error::Couldn't read apps.yaml: {err}")
+              sys.exit(1)
+          required = ["LOGIN_URL"]
+          for app in (registry.get("apps") or []):
+              ref = (app.get("creds_ref") or "").strip()
+              if not ref:
+                  continue
+              required.extend([f"{ref}_USER", f"{ref}_PASS"])
           missing = [k for k in required if not parsed.get(k)]
           if missing:
               print(f"::error::Missing required env keys: {', '.join(missing)}")
