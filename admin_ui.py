@@ -45,6 +45,7 @@ import auth
 import github_secret_updater as gh
 import roles
 from app_registry import AppEntry
+from ui_errors import show_error, show_warning, show_info, wrap_page
 
 
 # =================================================================
@@ -109,6 +110,7 @@ FREQ_CHOICES: dict[str, dict] = {
 # =================================================================
 # Page entry
 # =================================================================
+@wrap_page
 def main():
     principal = auth.gate()
     auth.require("see_admin_tab", principal)
@@ -350,8 +352,13 @@ def _render_add_app_wizard(principal: roles.UserPrincipal):
             "it to append the new credentials without dropping existing ones."
         )
     if errs:
-        for e in errs:
-            st.error(e)
+        # Validation failures — not a bug, just a missing field. Use
+        # warning severity so the user doesn't start training themselves
+        # to ignore red alerts.
+        show_warning(
+            "Please fix the following before submitting:",
+            hint="\n\n".join(f"• {e}" for e in errs),
+        )
         return
 
     # Dropdown value doubles as the internal id — they're identical by
@@ -387,13 +394,21 @@ def _commit_new_app(
     try:
         ctx = gh.context_from_streamlit(st)
     except Exception as e:
-        st.error(str(e))
+        show_warning(
+            "We couldn't connect to GitHub.",
+            hint=(
+                "The Streamlit secrets are probably missing the `[github]` "
+                "block (owner, repo, pat). Ask the admin to add it and "
+                "reboot the app."
+            ),
+            cause=e,
+        )
         return
 
     creds_ref = app_registry.next_creds_ref()
 
     # 1. CREDS secret
-    with st.status("Updating CREDS secret…", expanded=False) as status:
+    with st.status("Saving credentials…", expanded=False) as status:
         try:
             new_body = gh.build_updated_creds(
                 current_creds,
@@ -405,14 +420,23 @@ def _commit_new_app(
             gh.append_creds_lines(ctx, [new_body])
             # Cache for next add in same session.
             st.session_state["_creds_cache"] = new_body
-            status.update(label="CREDS secret updated", state="complete")
+            status.update(label="Credentials saved", state="complete")
         except Exception as e:
-            status.update(label="CREDS update failed", state="error")
-            st.error(f"Couldn't update CREDS secret: {e}")
+            status.update(label="Couldn't save credentials", state="error")
+            show_warning(
+                "We couldn't save the credentials for this app.",
+                hint=(
+                    "Most likely the GitHub token is missing the "
+                    "**Secrets: Read and write** permission, or the paste "
+                    "in the CREDS bundle section has a formatting issue. "
+                    "Nothing has been committed — safe to try again."
+                ),
+                cause=e,
+            )
             return
 
     # 2. apps.yaml
-    with st.status("Committing apps.yaml…", expanded=False) as status:
+    with st.status("Registering the app…", expanded=False) as status:
         try:
             import yaml
             entry = AppEntry(
@@ -437,12 +461,21 @@ def _commit_new_app(
                 f"feat(registry): add admin panel {entry.id} "
                 f"({roles.audit_stamp(principal.email, 'onboard app')})",
             )
-            status.update(label="apps.yaml committed", state="complete")
+            status.update(label="App registered", state="complete")
         except Exception as e:
-            status.update(label="apps.yaml commit failed", state="error")
-            st.error(
-                f"CREDS updated but apps.yaml commit failed: {e}. "
-                f"Check the repo — you may need to revert the CREDS secret."
+            status.update(label="Registration failed", state="error")
+            # Partial-success state: credentials already saved but the
+            # app isn't registered yet. Make that explicit so the admin
+            # knows to check the CREDS secret too.
+            show_error(
+                "The credentials were saved but registering the app failed.",
+                hint=(
+                    "Retry the form — CREDS is append-only-safe so a "
+                    "second attempt won't duplicate. If the same error "
+                    "happens again, contact the admin so they can clean up "
+                    "the orphaned credential entry in the GitHub secret."
+                ),
+                cause=e,
             )
             return
 
@@ -500,9 +533,15 @@ def _render_users_tab(principal):
             st.success(f"Set `{new_email}` → `{new_role}`. Redeploy in ~30 s.")
             st.rerun()
         except ValueError as e:
-            st.error(str(e))
+            # Input-validation failure (e.g. non-threecolts email). Not
+            # a bug — surface as a warning with the raw reason as hint.
+            show_warning("That email can't be granted a role.", hint=str(e))
         except Exception as e:
-            st.error(f"Failed to save: {e}")
+            show_warning(
+                "We couldn't save the new role.",
+                hint="Retry in a moment. If it repeats, contact the admin.",
+                cause=e,
+            )
 
     st.subheader("Revoke a role")
     candidates = [
@@ -522,9 +561,13 @@ def _render_users_tab(principal):
             st.success(f"Revoked `{pick}` (falls back to viewer). Redeploy in ~30 s.")
             st.rerun()
         except ValueError as e:
-            st.error(str(e))
+            show_warning("That user can't be revoked.", hint=str(e))
         except Exception as e:
-            st.error(f"Failed to save: {e}")
+            show_warning(
+                "We couldn't revoke the role.",
+                hint="Retry in a moment. If it repeats, contact the admin.",
+                cause=e,
+            )
 
 
 def _commit_roles_yaml(principal, action: str):
@@ -562,24 +605,41 @@ def _trigger_scrape_now(principal: roles.UserPrincipal) -> None:
     # already hidden from viewers, but role could have been revoked
     # between render and click.
     if not roles.can(principal, "add_app"):
-        st.error("You don't have permission to trigger scrapes.")
+        show_warning(
+            "You don't have permission to start a scrape.",
+            hint=(
+                "Ask a super admin to grant you the **editor** role in the "
+                "Users tab."
+            ),
+        )
         return
 
     try:
         ctx = gh.context_from_streamlit(st)
     except Exception as e:
-        st.error(
-            f"Couldn't reach GitHub: {e}\n\n"
-            "Check that the `[github]` block in Streamlit secrets has "
-            "`owner`, `repo`, and `pat` filled in. See MULTI_APP_DESIGN.md §3.2."
+        show_warning(
+            "We couldn't reach GitHub.",
+            hint=(
+                "The Streamlit secrets need a `[github]` block with `owner`, "
+                "`repo`, and `pat`. Ask the admin to add it and reboot the app."
+            ),
+            cause=e,
         )
         return
 
-    with st.spinner("Dispatching workflow..."):
+    with st.spinner("Dispatching workflow…"):
         try:
             gh.trigger_scrape(ctx, reason=f"on-demand by {principal.email}")
         except Exception as e:
-            st.error(f"Workflow dispatch failed: {e}")
+            show_warning(
+                "We couldn't start the scrape.",
+                hint=(
+                    "Usually this is a missing GitHub permission on the "
+                    "connected token (Actions: write). Retry in a minute; "
+                    "if it persists, contact the admin."
+                ),
+                cause=e,
+            )
             return
 
     st.success(
@@ -642,31 +702,36 @@ def _render_schedule_section(principal: roles.UserPrincipal) -> None:
                     f"UI within ~30 s so the 'current' label refreshes."
                 )
             except Exception as e:
-                # A 403 on .github/workflows/*.yml means the PAT lacks the
-                # Workflows write permission — GitHub enforces that on top
-                # of contents:write. Surface a targeted fix instead of the
-                # raw API blob.
+                # A 403 on .github/workflows/*.yml = the PAT is missing
+                # the Workflows write permission. GitHub enforces that
+                # separately from contents:write. Surface a targeted fix.
                 msg = str(e)
                 is_perm = (
                     "403" in msg
                     and ("workflow" in msg.lower() or "Resource not accessible" in msg)
                 )
                 if is_perm:
-                    st.error(
-                        "Couldn't update the workflow file — your GitHub PAT is "
-                        "missing the **Workflows: Read and write** permission.\n\n"
-                        "Fix (fine-grained PAT):  GitHub → Settings → Developer "
-                        "settings → Personal access tokens → Fine-grained tokens "
-                        "→ edit your token → Repository permissions → set "
-                        "**Workflows** to *Read and write* → Update. Then paste "
-                        "the refreshed token into Streamlit Cloud secrets under "
-                        "`[github].pat` and reboot the app.\n\n"
-                        "(If you're on a classic PAT, the scope is `workflow`.)"
+                    show_warning(
+                        "We couldn't change the schedule — the connected "
+                        "GitHub token doesn't have permission to edit "
+                        "workflow files.",
+                        hint=(
+                            "Ask the admin to update the GitHub PAT: under "
+                            "**Settings → Developer settings → Personal "
+                            "access tokens**, give the token **Workflows: "
+                            "Read and write** permission, then paste the "
+                            "new value into Streamlit Cloud secrets "
+                            "(`[github].pat`) and reboot the app."
+                        ),
+                        cause=e,
                     )
-                    with st.expander("Raw error"):
-                        st.code(msg)
                 else:
-                    st.error(f"Couldn't update schedule: {e}")
+                    show_warning(
+                        "Couldn't save the new schedule.",
+                        hint="Retry in a minute. If the same error repeats, "
+                             "send the admin the technical details below.",
+                        cause=e,
+                    )
 
 
 def _detect_current_schedule_label() -> Optional[str]:
