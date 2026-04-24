@@ -36,6 +36,7 @@ import streamlit as st
 
 import auth
 import roles
+from ui_errors import wrap_page
 from analytics_advanced import (
     DISPLAY_NAMES,
     build_stakeholder_report,
@@ -1662,6 +1663,7 @@ def _growth_tables_panel(
 # Main
 # ---------------------------------------------------------------------
 
+@wrap_page
 def main() -> None:
     # ------------------------------------------------------------
     # Auth gate — must run BEFORE st.set_page_config, because the
