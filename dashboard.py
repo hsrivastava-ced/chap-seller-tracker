@@ -56,8 +56,10 @@ from normalize import normalize_run_data
 # ---------------------------------------------------------------------
 
 ROOT = Path(__file__).parent
-HISTORY_DIR = ROOT / "results" / "history"
-REPORTS_DIR = ROOT / "results" / "reports"
+RESULTS_DIR = ROOT / "results"
+HISTORY_DIR = RESULTS_DIR / "history"
+REPORTS_DIR = RESULTS_DIR / "reports"
+LATEST_RUN_FILE = RESULTS_DIR / "latest" / "run.json"
 
 # Internal app keys the scraper writes. The Sidebar shows stakeholder
 # labels (SHEIN / TEMU US / TEMU EU / All Apps) via DISPLAY_NAMES.
@@ -381,20 +383,38 @@ def _inject_css() -> None:
 # Loaders — same local-JSON shape as before
 # ---------------------------------------------------------------------
 
-@st.cache_data(show_spinner=False)
+_LATEST_STAMP = "__latest__"
+
+
 def _list_run_stamps() -> list[str]:
-    if not HISTORY_DIR.exists():
-        return []
-    stamps = []
-    for d in HISTORY_DIR.iterdir():
-        if d.is_dir() and (d / "run.json").exists():
-            stamps.append(d.name)
-    return sorted(stamps, reverse=True)
+    """Enumerate runs for the dashboard.
+
+    Primary source is `results/history/<stamp>/run.json` — one directory
+    per scrape. But history is gitignored (to keep the repo clean) and
+    may be empty on a fresh clone or after a repo cleanup. When that's
+    the case, fall back to `results/latest/run.json` via a synthetic
+    "__latest__" stamp so the dashboard still has data to render.
+    """
+    stamps: list[str] = []
+    if HISTORY_DIR.exists():
+        for d in HISTORY_DIR.iterdir():
+            if d.is_dir() and (d / "run.json").exists():
+                stamps.append(d.name)
+    stamps.sort(reverse=True)
+    if stamps:
+        return stamps
+    # History empty — check for the latest-run file.
+    if LATEST_RUN_FILE.exists():
+        return [_LATEST_STAMP]
+    return []
 
 
 @st.cache_data(show_spinner=False)
 def _load_run(stamp: str) -> dict[str, Any]:
-    path = HISTORY_DIR / stamp / "run.json"
+    path = (
+        LATEST_RUN_FILE if stamp == _LATEST_STAMP
+        else HISTORY_DIR / stamp / "run.json"
+    )
     with path.open("r", encoding="utf-8") as fh:
         return json.load(fh)
 
