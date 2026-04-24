@@ -97,6 +97,58 @@ section[data-testid="stSidebar"] [data-baseweb="select"] svg {{
     fill: #cbd5e1 !important;
 }}
 
+/* Sidebar SECONDARY buttons (Sign out, etc.) — default Streamlit
+   renders them with light gray background + dark text. On our dark
+   slate that's white-on-white. Restyle to a transparent slate with
+   a light outline so the label is clearly visible. */
+section[data-testid="stSidebar"] button[kind="secondary"],
+section[data-testid="stSidebar"] button[data-testid="baseButton-secondary"] {{
+    background-color: transparent !important;
+    color: {PALETTE["sidebar_text"]} !important;
+    border: 1px solid #475569 !important;
+}}
+section[data-testid="stSidebar"] button[kind="secondary"]:hover,
+section[data-testid="stSidebar"] button[data-testid="baseButton-secondary"]:hover {{
+    background-color: #334155 !important;
+    border-color: #64748b !important;
+}}
+
+/* Inline <code> (e.g. "Role: `super_admin`") + code blocks — default
+   Streamlit renders them on a tinted light surface that's unreadable
+   against our dark slate. Give them a deeper slate with light-mono
+   text so the role chip, env-var hints, etc. stay legible. */
+section[data-testid="stSidebar"] code,
+section[data-testid="stSidebar"] pre {{
+    background-color: #0f172a !important;
+    color: #e2e8f0 !important;
+    border: 1px solid #334155 !important;
+    border-radius: 4px !important;
+    padding: 1px 6px !important;
+    font-size: 0.8rem !important;
+}}
+
+/* ---- consistent font sizing across the sidebar ---- */
+section[data-testid="stSidebar"] p,
+section[data-testid="stSidebar"] label,
+section[data-testid="stSidebar"] span,
+section[data-testid="stSidebar"] div {{
+    font-size: 0.9rem;
+    line-height: 1.45;
+}}
+/* Section headers ("FILTERS", "SYNC SCHEDULE") — slightly louder. */
+section[data-testid="stSidebar"] .sidebar-section,
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"] h1,
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"] h2,
+section[data-testid="stSidebar"] [data-testid="stSidebarContent"] h3 {{
+    font-size: 0.78rem !important;
+    font-weight: 600 !important;
+    letter-spacing: 0.08em !important;
+    text-transform: uppercase !important;
+    color: {PALETTE["sidebar_muted"]} !important;
+    margin-top: 1.25rem !important;
+    margin-bottom: 0.4rem !important;
+}}
+
 /* ---- primary buttons — indigo, matches theme primary ---- */
 button[kind="primary"] {{
     background-color: {PALETTE["primary"]} !important;
