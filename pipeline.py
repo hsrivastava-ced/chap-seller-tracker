@@ -137,6 +137,18 @@ def _push_all_snapshots(
         written[label] = client.push_snapshot(
             app_name=app, kind="sellers", rows=rows, run_stamp=run_stamp,
         )
+        # Task #80: also project into the relational sellers table so the
+        # dashboard can query by seller_id and preserve manual edits.
+        # Snapshot is authoritative; a failure here must not abort the run.
+        try:
+            written[f"{app}.sellers.relational"] = client.upsert_sellers(
+                app_name=app, rows=rows, run_stamp=run_stamp,
+            )
+        except Exception as err:
+            logging.warning(
+                f"upsert_sellers({app}) failed; snapshot already persisted. {err}"
+            )
+            written[f"{app}.sellers.relational"] = 0
     for app, rows in sorted(uninstalls_by_app.items()):
         label = f"{app}.uninstalls"
         written[label] = client.push_snapshot(

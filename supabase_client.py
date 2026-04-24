@@ -180,6 +180,177 @@ class SupabaseClient:
             logging.error(f"Supabase fetch_latest_snapshots failed: {err}")
             return []
 
+    # ---- sellers (relational, manual-edit-aware) ------------------------
+
+    # Columns the upsert RPC accepts. Mirrors canonical_schema.json
+    # (kind=sellers). Extra keys land in the `extra_fields` jsonb.
+    _SELLERS_CANONICAL_FIELDS = frozenset({
+        "seller_id", "store_url", "email", "username", "platforms",
+        "installed_on", "action", "app_type", "failed_order_count",
+        "last_sync", "order_count", "plan", "product_count",
+        "source_country", "steps_completed", "webhooks",
+    })
+
+    def upsert_sellers(
+        self,
+        app_name: str,
+        rows: list[dict],
+        *,
+        run_stamp: str,
+    ) -> int:
+        """Upsert a scrape into public.sellers with manual-edit guard.
+
+        Calls the `public.upsert_sellers_with_guard(rows jsonb, run_stamp text)`
+        SQL function (from sql/002_manual_edits.sql), which preserves data
+        fields for rows where `manually_edited_at IS NOT NULL` but still
+        advances last_scraped_at / last_scraped_run. Returns the number of
+        rows the server reported as upserted (0 in dry-run).
+
+        Callers typically invoke this alongside `push_snapshot` so we keep
+        both the immutable jsonb history AND the queryable projection.
+        """
+        if not rows:
+            return 0
+        if self._dry_run or self._client is None:
+            logging.info(
+                f"🧪 [dry-run] would upsert {len(rows)} seller row(s) into "
+                f"public.sellers for app={app_name} run={run_stamp}"
+            )
+            return 0
+
+        payload = [self._prepare_seller_row(app_name, r) for r in rows]
+        try:
+            resp = self._client.rpc(
+                "upsert_sellers_with_guard",
+                {"rows": payload, "run_stamp": run_stamp},
+            ).execute()
+            data = getattr(resp, "data", None)
+            return int(data) if isinstance(data, int) else int(data or 0)
+        except Exception as err:
+            logging.error(f"upsert_sellers_with_guard failed: {err}")
+            return 0
+
+    @classmethod
+    def _prepare_seller_row(cls, app_name: str, row: dict) -> dict:
+        """Split a scraper row into canonical fields + extra_fields jsonb.
+
+        Keeps the RPC contract stable regardless of what the scraper adds.
+        """
+        canonical: dict[str, Any] = {"app_name": app_name}
+        extra: dict[str, Any] = {}
+        for k, v in row.items():
+            if k in cls._SELLERS_CANONICAL_FIELDS:
+                canonical[k] = v
+            elif k in ("app_name", "run_stamp"):
+                continue  # never let a scraper row override these
+            else:
+                extra[k] = v
+        if extra:
+            canonical["extra_fields"] = extra
+        return canonical
+
+    def fetch_sellers(
+        self,
+        *,
+        app_name: str | None = None,
+        manually_edited_only: bool = False,
+        limit: int | None = None,
+    ) -> list[dict]:
+        if self._dry_run or self._client is None:
+            logging.info(
+                f"🧪 [dry-run] would fetch sellers app={app_name or 'any'} "
+                f"manual_only={manually_edited_only} limit={limit}"
+            )
+            return []
+        try:
+            q = self._client.table("sellers").select("*")
+            if app_name:
+                q = q.eq("app_name", app_name)
+            if manually_edited_only:
+                q = q.not_.is_("manually_edited_at", "null")
+            q = q.order("last_scraped_at", desc=True)
+            if limit:
+                q = q.limit(limit)
+            resp = q.execute()
+            return list(getattr(resp, "data", None) or [])
+        except Exception as err:
+            logging.error(f"fetch_sellers failed: {err}")
+            return []
+
+    def apply_manual_edit(
+        self,
+        *,
+        app_name: str,
+        seller_id: str,
+        field: str,
+        new_value: Any,
+        editor_email: str,
+        old_value: Any = None,
+        reason: str | None = None,
+    ) -> int:
+        """Record a single manual edit, let the DB trigger bump
+        manually_edited_at, then push the new value into sellers.
+
+        Steps (all server-side):
+          1. INSERT into manual_edits_log     → fn_manual_edits_touch
+             trigger sets sellers.manually_edited_at = now()
+          2. UPDATE sellers SET <field>=new   → only the one field,
+             leaving manually_edited_at intact (it was just bumped).
+
+        Callers need not pre-check permissions — roles.can(...) at the
+        UI layer is the gate. This method is dumb on purpose so it's
+        reusable from scripts.
+        """
+        if field not in self._SELLERS_CANONICAL_FIELDS:
+            raise ValueError(
+                f"{field!r} is not a canonical seller field; edit via "
+                f"extra_fields jsonb if needed."
+            )
+        if self._dry_run or self._client is None:
+            logging.info(
+                f"🧪 [dry-run] would edit {app_name}/{seller_id}.{field}: "
+                f"{old_value!r} → {new_value!r} (by {editor_email})"
+            )
+            return 0
+        try:
+            self._client.table("manual_edits_log").insert({
+                "editor_email": editor_email,
+                "app_name": app_name,
+                "seller_id": seller_id,
+                "field": field,
+                "old_value": None if old_value is None else str(old_value),
+                "new_value": None if new_value is None else str(new_value),
+                "reason": reason,
+            }).execute()
+            self._client.table("sellers").update({field: new_value}).match({
+                "app_name": app_name, "seller_id": seller_id,
+            }).execute()
+            return 1
+        except Exception as err:
+            logging.error(f"apply_manual_edit failed: {err}")
+            return 0
+
+    def fetch_manual_edits(
+        self,
+        *,
+        app_name: str | None = None,
+        seller_id: str | None = None,
+        limit: int = 50,
+    ) -> list[dict]:
+        if self._dry_run or self._client is None:
+            return []
+        try:
+            q = self._client.table("manual_edits_log").select("*")
+            if app_name:
+                q = q.eq("app_name", app_name)
+            if seller_id:
+                q = q.eq("seller_id", seller_id)
+            resp = q.order("edited_at", desc=True).limit(limit).execute()
+            return list(getattr(resp, "data", None) or [])
+        except Exception as err:
+            logging.error(f"fetch_manual_edits failed: {err}")
+            return []
+
     # ---- metrics ---------------------------------------------------------
 
     def push_metrics(self, metrics: Iterable[dict]) -> int:

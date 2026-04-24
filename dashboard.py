@@ -1691,7 +1691,7 @@ def main() -> None:
     if roles.can(principal, "see_admin_tab"):
         with st.sidebar:
             st.page_link(
-                "admin_ui.py",
+                "pages/Admin.py",
                 label="⚙ Admin panel",
                 help="Add new scraper sources and (super admin) manage users.",
             )
