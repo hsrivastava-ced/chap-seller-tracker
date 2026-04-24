@@ -299,6 +299,22 @@ def _inject_css() -> None:
         padding: 12px 16px 10px 16px;
         box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
         height: 100%;
+        position: relative;
+        cursor: help;
+    }}
+    .kpi-hint {{
+        position: absolute;
+        right: 10px;
+        bottom: 8px;
+        font-size: 0.66rem;
+        color: {PALETTE["text_soft"]};
+        opacity: 0.55;
+    }}
+    .kpi-card:hover {{
+        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+    }}
+    .kpi-card:hover .kpi-hint {{
+        opacity: 0.9;
     }}
     .kpi-label {{
         display: flex;
@@ -531,7 +547,12 @@ def _plotly_layout(
 
 
 def _install_trend_figure(monthly: dict, apps_to_plot: list[str]) -> go.Figure:
-    """Multi-line chart of installs per app over time, mm/yy axis."""
+    """Multi-line chart of installs per app over time, mm/yy axis.
+
+    Hover template spells out the calculation ("N sellers newly
+    installed in month; counted once per app per month") so the
+    number isn't opaque.
+    """
     fig = go.Figure()
     palette = [PALETTE["primary"], PALETTE["success"], PALETTE["warning"],
                PALETTE["accent"], PALETTE["danger"]]
@@ -540,13 +561,21 @@ def _install_trend_figure(monthly: dict, apps_to_plot: list[str]) -> go.Figure:
     for i, app in enumerate(apps_to_plot):
         series = monthly["installs"].get(app, {})
         y = [series.get(p, 0) for p in periods]
+        app_label = display_name(app)
         fig.add_trace(go.Scatter(
             x=x, y=y,
             mode="lines+markers",
-            name=display_name(app),
+            name=app_label,
             line=dict(color=palette[i % len(palette)], width=2.5),
-            marker=dict(size=6),
-            hovertemplate=f"<b>{display_name(app)}</b><br>%{{x}}: %{{y}} installs<extra></extra>",
+            marker=dict(size=7),
+            hovertemplate=(
+                f"<b>{app_label}</b> · %{{x}}<br>"
+                "<b>%{y}</b> new install(s)<br>"
+                "<span style='font-size:11px; color:#94a3b8'>"
+                "Sellers whose <code>installed_on</code> month = hovered month"
+                "</span>"
+                "<extra></extra>"
+            ),
         ))
     return _plotly_layout(fig, height=320)
 
@@ -588,17 +617,33 @@ def _installs_vs_uninstalls_figure(
     ]
 
     fig = go.Figure()
+    scope_label = display_name(app_key)
     fig.add_trace(go.Bar(
         x=x, y=inst,
         name="Installs",
         marker_color=inst_colors,
-        hovertemplate="<b>%{x}</b><br>Installs: %{y}<extra></extra>",
+        hovertemplate=(
+            f"<b>%{{x}}</b> · {scope_label}<br>"
+            "<b>%{y}</b> install(s)<br>"
+            "<span style='font-size:11px; color:#94a3b8'>"
+            "Sellers whose <code>installed_on</code> month = hovered month"
+            "</span>"
+            "<extra></extra>"
+        ),
     ))
     fig.add_trace(go.Bar(
         x=x, y=unin,
         name="Uninstalls",
         marker_color=unin_colors,
-        hovertemplate="<b>%{x}</b><br>Uninstalls: %{customdata}<extra></extra>",
+        hovertemplate=(
+            f"<b>%{{x}}</b> · {scope_label}<br>"
+            "<b>%{customdata}</b> uninstall(s)<br>"
+            "<span style='font-size:11px; color:#94a3b8'>"
+            "Sellers whose <code>uninstalled_on</code> month = hovered month. "
+            "Multi-platform uninstalls in the same month count once per app."
+            "</span>"
+            "<extra></extra>"
+        ),
         customdata=[abs(v) for v in unin],
     ))
     fig.update_layout(barmode="relative")
@@ -715,16 +760,35 @@ def _kpi_card(
     sublabel: str = "",
     foot: str = "",
     value_color: str | None = None,
+    tooltip: str = "",
 ) -> str:
+    """Render a KPI card as HTML.
+
+    `tooltip`: optional human-readable explanation of how the number
+    was computed (e.g. "Count of sellers in apps.yaml 'active' list
+    whose last scrape row has a non-empty seller_id, excluding test
+    stores"). Rendered as a native HTML `title` attribute so users
+    can hover the card for the calculation without us having to
+    invent a custom tooltip widget. A small "?" hint in the bottom
+    corner makes the hover affordance discoverable.
+    """
     color_style = f"color:{value_color};" if value_color else ""
     sub_html = f'<div class="kpi-sublabel">{sublabel}</div>' if sublabel else ""
     foot_html = f'<div class="kpi-foot">{foot}</div>' if foot else ""
+    hint_html = (
+        '<div class="kpi-hint" aria-hidden="true">ⓘ hover</div>'
+        if tooltip else ""
+    )
+    # Escape double-quotes in the tooltip so the title attribute doesn't break.
+    safe_tooltip = tooltip.replace('"', '&quot;') if tooltip else ""
+    title_attr = f' title="{safe_tooltip}"' if safe_tooltip else ""
     return (
-        f'<div class="kpi-card">'
+        f'<div class="kpi-card"{title_attr}>'
         f'<div class="kpi-label">{label}</div>'
         f'{sub_html}'
         f'<div class="kpi-value" style="{color_style}">{value}</div>'
         f'{foot_html}'
+        f'{hint_html}'
         f'</div>'
     )
 
@@ -1087,13 +1151,21 @@ def _kpi_row(
         unsafe_allow_html=True,
     )
 
+    app_label = display_name(app_key)
+
     row1 = st.columns(4)
     row1[0].markdown(
         _kpi_card(
             "👥 Active Installs",
             f"{active:,}",
-            sublabel=f"Across {display_name(app_key)}",
+            sublabel=f"Across {app_label}",
             value_color=PALETTE["primary"],
+            tooltip=(
+                f"Count of rows in the latest scrape for {app_label} where "
+                "the seller_id is non-empty and the row isn't a known test "
+                "store (demo/qa shops are filtered via exclude_test_stores). "
+                "Refreshes with every scrape run."
+            ),
         ),
         unsafe_allow_html=True,
     )
@@ -1103,6 +1175,11 @@ def _kpi_row(
             f"{new_installs:,}",
             sublabel=period_sub,
             value_color=PALETTE["success"],
+            tooltip=(
+                f"Sellers whose installed_on date falls in this period "
+                f"({period_sub}), counted from the latest scrape of "
+                f"{app_label}. One seller = one install event."
+            ),
         ),
         unsafe_allow_html=True,
     )
@@ -1112,6 +1189,13 @@ def _kpi_row(
             f"{new_uninstalls:,}",
             sublabel=period_sub,
             value_color=PALETTE["danger"],
+            tooltip=(
+                f"Sellers whose uninstalled_on date falls in this period "
+                f"({period_sub}), from the latest scrape of {app_label}. "
+                "A seller who removes multiple platforms in the same month "
+                "is counted once per app-platform pair — never double-"
+                "counted within the same (month, app)."
+            ),
         ),
         unsafe_allow_html=True,
     )
@@ -1121,6 +1205,13 @@ def _kpi_row(
             mom_str,
             sublabel="Installs vs prior month",
             value_color=mom_color,
+            tooltip=(
+                "(installs this period − installs prior period) ÷ installs "
+                "prior period × 100. Computed over the FULL unfiltered time "
+                "series, so Jan 2026 compares to Dec 2025 even when the "
+                "Year filter hides 2025 rows. '—' means there's no prior "
+                "period to compare against."
+            ),
         ),
         unsafe_allow_html=True,
     )
@@ -1133,6 +1224,11 @@ def _kpi_row(
             f"{paid_count:,}",
             sublabel="On a real plan",
             value_color=PALETTE["success"],
+            tooltip=(
+                f"Sellers whose plan field contains a named subscription "
+                f"(anything other than blank, N/A, Free, or Trial) for "
+                f"{app_label}."
+            ),
         ),
         unsafe_allow_html=True,
     )
@@ -1142,6 +1238,10 @@ def _kpi_row(
             f"{notpaid_count:,}",
             sublabel="Free / no plan",
             value_color=PALETTE["warning"],
+            tooltip=(
+                f"Sellers whose plan field is empty, N/A, Free, or Trial — "
+                f"not yet converted to a paid subscription — for {app_label}."
+            ),
         ),
         unsafe_allow_html=True,
     )
@@ -1153,6 +1253,11 @@ def _kpi_row(
             f"{act.get('active_sellers', 0):,}",
             sublabel=f"of {act.get('total_sellers', 0):,} sellers",
             value_color=PALETTE["primary"],
+            tooltip=(
+                f"Sellers with order_count ≥ 1 at the time of the latest "
+                f"scrape. Denominator is every seller currently installed "
+                f"on {app_label}."
+            ),
         ),
         unsafe_allow_html=True,
     )
@@ -1162,6 +1267,12 @@ def _kpi_row(
             f"{act.get('zero_order_sellers', 0):,}",
             sublabel="Installed but never transacted",
             value_color=PALETTE["accent"],
+            tooltip=(
+                f"Sellers who have installed {app_label} but have "
+                f"order_count = 0 at latest scrape — install happened but "
+                f"no order has flowed yet. Candidates for onboarding "
+                f"outreach."
+            ),
         ),
         unsafe_allow_html=True,
     )
