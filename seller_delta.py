@@ -103,12 +103,29 @@ def compute_events(
     app_id: str,
     prior_rows: list[dict],
     latest_rows: list[dict],
+    latest_uninstalls: list[dict] | None = None,
 ) -> list[DeltaEvent]:
     """Return a list of DeltaEvents for the transition prior → latest.
+
+    `latest_uninstalls` (optional) is the latest run's uninstalls list
+    for this app. When provided, "churned" events are gated by it: a
+    seller is only flagged as churned if they ALSO appear in the
+    uninstalls list. Without this gate, every seller missed by an
+    incomplete scrape ("ghost churn") would be flagged as a real
+    customer loss — verified live 2026-04-26: SHEIN cHAP=347 vs
+    scrape=200, all 48 supposed churns were actually still active in
+    cHAP. Caller can pass None to keep the legacy behaviour (every
+    missing seller is treated as churn).
 
     Never raises — broken input rows are skipped with a warning log.
     """
     events: list[DeltaEvent] = []
+    uninstalled_ids: set[str] | None = None
+    if latest_uninstalls is not None:
+        uninstalled_ids = {
+            (u.get("seller_id") or "") for u in latest_uninstalls
+            if u.get("seller_id")
+        }
     try:
         prior = _key_by_seller(prior_rows)
         latest = _key_by_seller(latest_rows)
@@ -136,8 +153,15 @@ def compute_events(
         # This is the uniquely valuable one — cHAP's admin panel has
         # already forgotten these sellers; only our snapshots remember
         # what they were worth when they were still installed.
+        # GATE: when the caller provides the uninstalls list, only emit
+        # for sellers who actually appear there. Otherwise we'd flag
+        # every scrape-coverage gap as a customer loss.
         for sid, row in prior.items():
             if sid in latest:
+                continue
+            if uninstalled_ids is not None and sid not in uninstalled_ids:
+                # Ghost churn — seller still active in cHAP, just missed
+                # by this scrape. Skip rather than mislead BD reps.
                 continue
             orders = _num(row.get("order_count"))
             products = _num(row.get("product_count"))

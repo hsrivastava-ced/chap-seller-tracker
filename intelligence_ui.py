@@ -1059,10 +1059,17 @@ def _render_delta_feed(*, app_key: str) -> None:
             prior_rows, latest_rows = p_rows, l_rows
 
     # Same multi-source chain for the uninstalls list — different key
-    # in run.json. New uninstalls (in latest but not prior) are the
-    # single highest-value lead the BD reps can action: those sellers
-    # just left, and the team should reach out today to learn why.
+    # in run.json. We need this list for two things:
+    #  1. Surface "new uninstalls since prior scrape" — highest-value
+    #     callback list for BD reps.
+    #  2. Gate "churned" events to ONLY sellers that actually appear in
+    #     uninstalls. A seller missing from the latest scrape but NOT
+    #     in uninstalls is a scrape-coverage gap, not real churn —
+    #     flagging them as churn would mislead the team (verified
+    #     2026-04-26: SHEIN scrape=200 vs cHAP truth=347, all 48
+    #     supposed churns were ghosts).
     new_uninstalls: list[dict] = []
+    latest_uninst: list[dict] = []
     try:
         _, _, prior_uninst, latest_uninst = (
             seller_delta_source.from_git_history_uninstalls(
@@ -1093,8 +1100,24 @@ def _render_delta_feed(*, app_key: str) -> None:
             )
         return
 
-    events = seller_delta.compute_events(app_key, prior_rows, latest_rows)
+    events = seller_delta.compute_events(
+        app_key, prior_rows, latest_rows,
+        latest_uninstalls=latest_uninst,
+    )
     counts = seller_delta.summarise(events)
+
+    # Coverage-gap detection: count sellers missing from latest that
+    # are NOT in uninstalls — those are sellers the scraper failed to
+    # capture this run. Surface a warning so reps don't take the
+    # absence of churn events as "all sellers retained".
+    prior_ids = {s.get("seller_id") for s in prior_rows}
+    latest_ids = {s.get("seller_id") for s in latest_rows}
+    uninst_ids = {u.get("seller_id") for u in (latest_uninst or [])}
+    ghost_count = len(prior_ids - latest_ids - uninst_ids)
+    coverage_gap = ghost_count > 5 or (
+        prior_rows and len(latest_rows) < 0.85 * len(prior_rows)
+        and ghost_count > 0
+    )
 
     # Headline strip — counts per kind.
     def _pill(kind: str) -> str:
@@ -1118,8 +1141,9 @@ def _render_delta_feed(*, app_key: str) -> None:
         )
 
     with st.expander(
-        f"⚡ What changed (day-over-day) · {len(events)} events",
-        expanded=len(events) > 0,
+        f"⚡ What changed (day-over-day) · {len(events)} events"
+        + (" · ⚠ scrape coverage gap" if coverage_gap else ""),
+        expanded=len(events) > 0 or coverage_gap,
     ):
         st.markdown(
             f'<div style="color:#94a3b8; font-size:0.8rem; '
@@ -1127,6 +1151,33 @@ def _render_delta_feed(*, app_key: str) -> None:
             f'vs <b>{prior_stamp or "prior"}</b></div>{strip}',
             unsafe_allow_html=True,
         )
+
+        # Coverage-gap warning — surfaces when the latest scrape captured
+        # noticeably fewer rows than the prior one AND those missing
+        # sellers AREN'T in the uninstalls list. This is almost always
+        # a scraper bug (pagination, dropdown, login retry), not real
+        # churn. Without this warning the empty event timeline would
+        # look like "everyone retained ✅" when actually we just lost
+        # visibility on N sellers.
+        if coverage_gap:
+            st.markdown(
+                f'<div style="margin:8px 0 12px 0; padding:12px 14px; '
+                f'background:rgba(245,158,11,0.10); border-left:4px '
+                f'solid #f59e0b; border-radius:6px;">'
+                f'<b style="color:#f59e0b;">⚠ Scrape coverage gap · '
+                f'{ghost_count} seller{"s" if ghost_count != 1 else ""} '
+                f'missing from this run</b><br>'
+                f'<span style="color:#94a3b8; font-size:0.85rem;">'
+                f'These sellers were in the prior scrape '
+                f'({len(prior_rows)} sellers) but not in this one '
+                f'({len(latest_rows)} sellers), AND they don\'t appear '
+                f'in the uninstalls list — meaning they\'re likely '
+                f'still active in cHAP and the scraper just missed them. '
+                f'Real churn requires an entry in the uninstalls list. '
+                f'Treat the events below as <b>partial</b> until the '
+                f'next clean scrape.</span></div>',
+                unsafe_allow_html=True,
+            )
 
         # New uninstalls — render BEFORE the typed event timeline because
         # this is the highest-priority callback list for BD reps. A seller
