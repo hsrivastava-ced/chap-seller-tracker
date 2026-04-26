@@ -1,21 +1,4 @@
-# roles.yaml — dashboard RBAC.
-#
-# Three roles:
-#   - super_admin:  full access; can grant/revoke roles and approve schema drift
-#   - editor:       can add new admin-panel sources via the UI
-#   - viewer:       read-only (default for any @threecolts.com user not listed)
-#
-# Grant roles via the Streamlit admin UI (Users tab, super_admin only).
-# The UI will commit changes to this file automatically.
-#
-# Safety net: hsrivastava@threecolts.com is ALSO hard-coded as super_admin
-# in auth.py. Even if this file is missing or malformed, he can log in
-# and fix it.
-
 schema_version: 1
-
 roles:
   hsrivastava@threecolts.com: super_admin
-  # Add more entries below as the team grows. Example:
-  # some.editor@threecolts.com: editor
-  # some.viewer@threecolts.com: viewer
+  vroy@threecolts.com: editor
