@@ -36,7 +36,7 @@ from analytics_advanced import (
 from normalize import normalize_run_data
 from supabase_client import SupabaseClient
 from ui_errors import wrap_page
-from ui_theme import apply_shared_theme
+from ui_theme import apply_shared_theme, render_theme_picker
 
 
 ROOT = Path(__file__).parent
@@ -226,6 +226,9 @@ def _render_sidebar(available_apps: list[str], *, principal=None) -> str:
             help="Pick the app whose sellers you want to work today.",
         )
         st.markdown("</div>", unsafe_allow_html=True)
+
+        # ---- THEME PICKER (3 background palettes) ------------------
+        render_theme_picker()
 
         # ---- FOOTER CARD -------------------------------------------
         st.markdown(

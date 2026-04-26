@@ -51,8 +51,11 @@ PALETTE: dict[str, str] = {
     "warning":         "#f59e0b",
     "warning_soft":    "#fcd34d",
     "neutral":         "#94a3b8",
-    # Surfaces — page (light) vs sidebar (dark navy)
-    "bg":              "#f3f4f6",
+    # Surfaces — page (light) vs sidebar (dark navy).
+    # `bg` is the DEFAULT; users can pick from BG_THEMES via the
+    # sidebar "Theme" selector and the choice is persisted in
+    # st.session_state.
+    "bg":              "#eef2f7",  # soft cool slate — easier on eyes than pure white
     "card":            "#ffffff",
     "text":            "#0f172a",
     "text_soft":       "#64748b",
@@ -219,26 +222,39 @@ section[data-testid="stSidebar"] [data-baseweb="tag"] {{
 section[data-testid="stSidebar"] [data-baseweb="select"] svg {{
     fill: #cbd5e1 !important;
 }}
-/* Multiselect/select tag pills — first character ("TEMU US" → "EMU US")
-   was being clipped because BaseWeb's inner element relies on left
-   padding that any global override can strip. Fix it globally (not just
-   sidebar) and target the inner content wrapper too. */
+/* Multiselect tag pills — first character was being clipped on every
+   tag (TEMU US → EMU US). Root cause: BaseWeb's inner element has
+   `direction: ltr; box-sizing: content-box; transform: translate3d(...)`
+   that makes any inline-level override of padding leak the first
+   glyph out of the container's visible area. Fix: force `min-width:
+   fit-content` + ensure the parent multi-line input doesn't clip. */
 [data-baseweb="tag"] {{
-    padding: 4px 10px !important;
+    padding: 4px 12px !important;
     font-size: 0.85rem !important;
     line-height: 1.2 !important;
     overflow: visible !important;
+    min-width: fit-content !important;
+    margin: 2px !important;
 }}
-[data-baseweb="tag"] > div,
+[data-baseweb="tag"] > * {{
+    overflow: visible !important;
+    text-overflow: clip !important;
+    min-width: 0 !important;
+    white-space: nowrap !important;
+}}
+[data-baseweb="tag"] [title],
 [data-baseweb="tag"] span {{
-    padding-left: 4px !important;
-    padding-right: 4px !important;
+    padding: 0 4px !important;
     font-size: 0.85rem !important;
     overflow: visible !important;
     text-overflow: clip !important;
+    white-space: nowrap !important;
 }}
-[data-baseweb="tag"] > div:first-child {{
-    padding-left: 6px !important;
+/* The select/multiselect host control itself — let the tags expand
+   inside it without the host's own clipping clipping the first
+   character of the first tag. */
+[data-baseweb="select"] [data-baseweb="tag"]:first-child {{
+    margin-left: 4px !important;
 }}
 
 /* --- Sidebar buttons. Primary stays indigo. Secondary becomes a
@@ -358,10 +374,52 @@ div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {{
 """
 
 
+BG_THEMES: dict[str, dict[str, str]] = {
+    # Three handpicked page-background palettes. `bg` is the page
+    # surface, `border` is the per-card outline so light-on-light
+    # gradients still register. Sidebar stays navy across all three.
+    "Slate":  {"bg": "#eef2f7", "border": "#e2e8f0", "label": "Slate (cool · default)"},
+    "Warm":   {"bg": "#faf6f1", "border": "#ead8c6", "label": "Warm (cream · easy on eyes)"},
+    "Mist":   {"bg": "#eaf3fb", "border": "#cfe2f3", "label": "Mist (sky · airy)"},
+}
+
+
 def apply_shared_theme() -> None:
     """Inject the shared CSS snippet. Call at the top of every page's
     main(), after `st.set_page_config` but before rendering widgets.
     Safe to call multiple times per session — Streamlit dedupes the
     injected style block.
     """
-    st.markdown(_SHARED_CSS, unsafe_allow_html=True)
+    # Pull the user's BG theme choice from session_state (set via
+    # render_theme_picker in the sidebar). Falls back to Slate, the
+    # default soft cool surface.
+    theme_key = st.session_state.get("_bg_theme", "Slate")
+    theme = BG_THEMES.get(theme_key, BG_THEMES["Slate"])
+    PALETTE["bg"] = theme["bg"]
+    PALETTE["border"] = theme["border"]
+    css = _SHARED_CSS.replace("{{BG_OVERRIDE}}", theme["bg"])
+    st.markdown(css, unsafe_allow_html=True)
+    # Inline override to force the override even if the page also
+    # injects its own _inject_css later (e.g. dashboard.py).
+    st.markdown(
+        f'<style>.main, .stApp {{ background-color: {theme["bg"]} !important; }}</style>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_theme_picker() -> None:
+    """Render a 3-option BG theme selector in the sidebar. Choice
+    persists in session_state and the page reruns to apply it. Call
+    from any page's sidebar render — Intelligence, Dashboard, Admin.
+    """
+    current = st.session_state.get("_bg_theme", "Slate")
+    options = list(BG_THEMES.keys())
+    pick = st.sidebar.selectbox(
+        "Background theme",
+        options=options,
+        index=options.index(current) if current in options else 0,
+        format_func=lambda k: BG_THEMES[k]["label"],
+        key="_bg_theme",
+        help="Switch the page background — sidebar stays the same. Choice persists for this session.",
+    )
+    return pick
