@@ -13,6 +13,7 @@ wrapper so it can also be imported by tests).
 """
 from __future__ import annotations
 
+import logging
 import os
 from datetime import date
 from pathlib import Path
