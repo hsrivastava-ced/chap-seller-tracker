@@ -525,6 +525,34 @@ def _ensure_framework_filter_is_all(page, app_id: str) -> None:
         f"{option_values} (frameworks: {framework_options})"
     )
 
+    # Decision: only flip to "all" when the app exposes 2+ framework
+    # options. On single-framework apps (TEMU US, SHEIN — only
+    # ['all', 'shopify']) cHAP's "all" filter returns a smaller subset
+    # of rows than the default 'shopify' — verified live 2026-04-26
+    # against TEMU US (default=84, all=20). Flipping there silently
+    # loses 76% of the data. Multi-framework apps (TEMU EU =
+    # ['all', 'shopify', 'prestashop'], TikTok future, etc.) genuinely
+    # need 'all' to capture every framework's sellers — verified same
+    # day on TEMU EU which captured 73 sellers across both frameworks.
+    if len(framework_options) < 2:
+        logging.info(
+            f"🧭 framework filter: only 1 framework ({framework_options}) "
+            f"for {app_id} — leaving on default ('{target_text}') to "
+            f"preserve row coverage. cHAP's 'all' on single-framework "
+            f"apps returns FEWER rows than the default."
+        )
+        # Close the popup we opened above so it doesn't overlay later
+        # widgets (Customize Grid, page-size sorter).
+        try:
+            sp_close = target_select.locator(".inte__Select--Selected").first
+            if sp_close.count():
+                sp_close.click()
+            else:
+                page.keyboard.press("Escape")
+        except Exception:
+            pass
+        return
+
     logging.info(
         f"🧭 Flipping framework filter to 'all' for {app_id} "
         f"(was '{target_text}', seen={seen_values}, frameworks="
@@ -2045,17 +2073,47 @@ def set_page_size_100(page, app_name: str) -> bool:
     """
     logging.info(f"🔢 Setting page size to 100 for {app_name}")
 
+    # Defensive cleanup: customize_grid_select_all sometimes leaves a
+    # stale inte-Select popup overlay on the page when its individual
+    # column-tick retries time out (verified live 2026-04-26: 5 popup
+    # reopen failures on TEMU US's seller page left an invisible-but-
+    # hit-testable overlay sitting on top of the pagination footer,
+    # making the page-size Sorter unreachable). Press Escape + close
+    # every popup via JS so we start from a clean DOM state.
+    try:
+        page.keyboard.press("Escape")
+    except Exception:
+        pass
+    try:
+        page.evaluate(
+            """() => {
+                document.querySelectorAll(
+                    'div.inte-formElement--Wrap[aria-expanded="true"]'
+                ).forEach(el => el.setAttribute('aria-expanded', 'false'));
+                document.querySelectorAll('div.inte-select--Fake').forEach(el => {
+                    el.style.visibility = 'hidden';
+                    el.style.opacity = '0';
+                });
+            }"""
+        )
+    except Exception:
+        pass
+    page.wait_for_timeout(300)
+
     # The "Items :" dropdown lives inside `.inte-Pagination-perPage--Sorter`
     # which is itself inside the `.inte-Pagination` footer card. Scope by
     # that ancestor to avoid matching any other inte-select on the page.
+    # Bumped wait to 30s — on apps where Customize Grid retried for ~70s
+    # cHAP can take a beat to redraw the pagination footer once the
+    # Customize popup is finally dismissed.
     sorter = page.locator(
         "div.inte-Pagination div.inte-Pagination-perPage--Sorter"
     ).first
     try:
-        sorter.wait_for(state="visible", timeout=10000)
+        sorter.wait_for(state="visible", timeout=30000)
     except PwTimeout:
         logging.warning(
-            f"   ↳ page-size Sorter not visible for {app_name} within 10s; "
+            f"   ↳ page-size Sorter not visible for {app_name} within 30s; "
             "leaving default page size"
         )
         return False
