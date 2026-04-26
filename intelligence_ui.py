@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -378,6 +378,20 @@ def main() -> None:
 
     # ---- Day-over-day delta feed ------------------------------------
     _render_delta_feed(app_key=app_key)
+
+    # ---- Last 7 days movement ---------------------------------------
+    # Wider window than the delta feed (which only compares last 2
+    # snapshots): rolls up every install/uninstall whose date falls in
+    # the past 7 days. Joins each uninstall back to the active-seller
+    # snapshot (by email or store) so we can show plan + lifetime
+    # orders + product count for each uninstall — the BD reps' priority
+    # signal for win-back outreach.
+    _render_seven_day_movement(
+        app_key=app_key,
+        sellers=sellers,
+        uninstalls=run.get("uninstalls", {}).get(app_key, []) or [],
+        today=today,
+    )
 
     tab_labels = [f"{b.title}  ·  {b.count}" for b in active]
     tabs = st.tabs(tab_labels)
@@ -1026,6 +1040,201 @@ _DELTA_STYLE = {
     "order_spike":        ("📈", "#10b981", "Order spike"),
     "failed_order_spike": ("⚠️", "#ef4444", "Failures rising"),
 }
+
+
+def _parse_seller_date(raw: str | None) -> date | None:
+    """Parse a date out of cHAP's two date conventions.
+
+    Active sellers' `installed_on` is "DD/MM/YYYY". Uninstalls'
+    `uninstalled_on` is "YYYY-MM-DD HH:MM:SS". Returns a date object
+    or None if neither format matches.
+    """
+    if not raw:
+        return None
+    raw = str(raw).strip()
+    # ISO-style first (uninstalls); take just the date portion.
+    try:
+        return datetime.strptime(raw[:10], "%Y-%m-%d").date()
+    except ValueError:
+        pass
+    # DD/MM/YYYY (active sellers).
+    try:
+        return datetime.strptime(raw[:10], "%d/%m/%Y").date()
+    except ValueError:
+        return None
+
+
+def _render_seven_day_movement(
+    *, app_key: str, sellers: list[dict], uninstalls: list[dict], today: date,
+) -> None:
+    """Show a 7-day window of installs + uninstalls for the selected app.
+
+    Joins each uninstall back to the seller-list metadata (by email or
+    normalised store URL) so each uninstall card shows what the seller
+    was worth at install time — plan, lifetime orders, product count.
+    The BD team uses this to prioritise win-back outreach: a 4,000-order
+    Pro account that just left is the call of the day; a free-plan
+    seller who never set up isn't.
+    """
+    from datetime import timedelta
+
+    cutoff = today - timedelta(days=7)
+
+    # ---- Bucket installs + uninstalls by date ---------------------------
+    recent_installs = [
+        s for s in sellers
+        if (d := _parse_seller_date(s.get("installed_on"))) and d >= cutoff
+    ]
+    recent_uninstalls = [
+        u for u in uninstalls
+        if (d := _parse_seller_date(u.get("uninstalled_on"))) and d >= cutoff
+    ]
+
+    # Build install-time stats index from the active sellers list — by
+    # email + by normalised store URL — so each uninstall card can
+    # surface plan / lifetime orders / product count.
+    def _norm_url(s: str) -> str:
+        s = (s or "").strip().lower()
+        for prefix in ("https://", "http://", "www."):
+            if s.startswith(prefix):
+                s = s[len(prefix):]
+        return s.rstrip("/")
+    by_email: dict[str, dict] = {}
+    by_store: dict[str, dict] = {}
+    for s in sellers:
+        em = (s.get("email") or "").strip().lower()
+        st_url = _norm_url(s.get("store_url") or "")
+        if em:
+            by_email[em] = s
+        if st_url:
+            by_store[st_url] = s
+
+    label = (
+        f"📅 Last 7 days · {len(recent_installs)} new install"
+        f"{'s' if len(recent_installs) != 1 else ''} · "
+        f"{len(recent_uninstalls)} uninstall"
+        f"{'s' if len(recent_uninstalls) != 1 else ''}"
+    )
+    with st.expander(label, expanded=len(recent_uninstalls) > 0 or len(recent_installs) > 0):
+        st.caption(
+            f"Window: {cutoff.strftime('%b %d')} – {today.strftime('%b %d, %Y')}. "
+            "Uninstalls below are joined to install-time data so you can "
+            "see plan + lifetime orders for each — that's how you "
+            "prioritise win-back outreach."
+        )
+
+        if not recent_installs and not recent_uninstalls:
+            st.info(
+                "No install/uninstall activity captured in the last 7 days "
+                f"for {display_name(app_key)}. Either the app is steady-state, "
+                "or scrape coverage gaps mean the dates we have don't fall "
+                "in this window."
+            )
+            return
+
+        # ---- 7-day daily timeline (counts per day) ---------------------
+        from datetime import timedelta as _td
+        day_buckets: dict[str, dict[str, int]] = {}
+        for offset in range(7, -1, -1):
+            d = today - _td(days=offset)
+            day_buckets[d.isoformat()] = {"installs": 0, "uninstalls": 0}
+        for s in recent_installs:
+            d = _parse_seller_date(s.get("installed_on"))
+            if d and d.isoformat() in day_buckets:
+                day_buckets[d.isoformat()]["installs"] += 1
+        for u in recent_uninstalls:
+            d = _parse_seller_date(u.get("uninstalled_on"))
+            if d and d.isoformat() in day_buckets:
+                day_buckets[d.isoformat()]["uninstalls"] += 1
+
+        chart_df = pd.DataFrame(
+            [{"date": k, "Installs": v["installs"], "Uninstalls": v["uninstalls"]}
+             for k, v in day_buckets.items()]
+        )
+        chart_df["date"] = pd.to_datetime(chart_df["date"])
+        st.bar_chart(chart_df.set_index("date"), height=220)
+
+        # ---- Recent uninstalls table (joined with install-time stats) --
+        if recent_uninstalls:
+            st.markdown(
+                f'<div style="margin:14px 0 6px 0;"><b style="color:#ef4444; '
+                f'font-size:0.95rem;">📞 {len(recent_uninstalls)} uninstall'
+                f'{"s" if len(recent_uninstalls) != 1 else ""} in the past '
+                f'7 days · ranked by lifetime orders</b></div>'
+                '<div style="color:#64748b; font-size:0.82rem; margin-bottom:8px;">'
+                'Highest-orders sellers first — those are the win-back priority calls.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+
+            joined_rows = []
+            for u in recent_uninstalls:
+                em = (u.get("email") or "").strip().lower()
+                store = _norm_url(u.get("username") or u.get("store_url") or "")
+                install_row = by_email.get(em) or by_store.get(store) or {}
+                try:
+                    orders = int(install_row.get("order_count") or 0)
+                except (ValueError, TypeError):
+                    orders = 0
+                try:
+                    products = int(install_row.get("product_count") or 0)
+                except (ValueError, TypeError):
+                    products = 0
+                plan = (install_row.get("plan") or "").strip()
+                if plan.lower() in {"n/a", "—", "-", "none", ""}:
+                    plan = "—"
+                joined_rows.append({
+                    "Uninstalled on": u.get("uninstalled_on") or "",
+                    "Email": u.get("email") or "—",
+                    "Store": u.get("username") or u.get("store_url") or "—",
+                    "Plan at uninstall": plan,
+                    "Lifetime orders": orders,
+                    "Products": products,
+                    "Platform": u.get("platform") or "—",
+                })
+            joined_rows.sort(key=lambda r: -r["Lifetime orders"])
+            st.dataframe(
+                pd.DataFrame(joined_rows),
+                hide_index=True,
+                use_container_width=True,
+            )
+
+        # ---- Recent installs table -------------------------------------
+        if recent_installs:
+            st.markdown(
+                f'<div style="margin:14px 0 6px 0;"><b style="color:#10b981; '
+                f'font-size:0.95rem;">🌱 {len(recent_installs)} new install'
+                f'{"s" if len(recent_installs) != 1 else ""} in the past '
+                f'7 days</b></div>'
+                '<div style="color:#64748b; font-size:0.82rem; margin-bottom:8px;">'
+                'Welcome these sellers, confirm setup, and start the relationship.'
+                '</div>',
+                unsafe_allow_html=True,
+            )
+            install_rows = []
+            for s in recent_installs:
+                plan = (s.get("plan") or "").strip()
+                if plan.lower() in {"n/a", "—", "-", "none", ""}:
+                    plan = "—"
+                try:
+                    orders = int(s.get("order_count") or 0)
+                except (ValueError, TypeError):
+                    orders = 0
+                install_rows.append({
+                    "Installed on": s.get("installed_on") or "",
+                    "Email": s.get("email") or "—",
+                    "Store": s.get("store_url") or "—",
+                    "Plan": plan,
+                    "Orders": orders,
+                    "Source": s.get("source_country") or "—",
+                })
+            # Most recent installs first.
+            install_rows.sort(key=lambda r: r["Installed on"], reverse=True)
+            st.dataframe(
+                pd.DataFrame(install_rows),
+                hide_index=True,
+                use_container_width=True,
+            )
 
 
 def _render_delta_feed(*, app_key: str) -> None:

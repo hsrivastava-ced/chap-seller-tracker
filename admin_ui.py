@@ -186,6 +186,126 @@ def main():
 # =================================================================
 # Overview tab — the apps table + Run scrape now
 # =================================================================
+def _render_scrape_health_banner() -> None:
+    """Detect partial-failure scrapes and warn the admin.
+
+    A scheduled cron run can succeed for some apps and fail for others
+    (login fails, cHAP-side outage, etc.). The scraper's merge logic
+    keeps the prior rows in results/latest/run.json so the dashboard
+    doesn't drop to zero — but admins still need to KNOW which apps
+    were affected so they can investigate. We compare the run.json's
+    history-snapshot run_stamp (what THIS run scraped) against the
+    full active-app list from apps.yaml; any active app missing from
+    the snapshot's `data` map = a scrape that didn't capture rows.
+    """
+    import json as _json
+    import subprocess as _sp
+    from pathlib import Path as _Path
+
+    latest_path = _Path("results/latest/run.json")
+    if not latest_path.exists():
+        st.info(
+            "No scrape data on disk yet. Click **▶ Run scrape now** above "
+            "or wait for the next scheduled cron."
+        )
+        return
+
+    try:
+        latest = _json.loads(latest_path.read_text(encoding="utf-8"))
+    except Exception as err:
+        show_warning(
+            "Couldn't read the latest scrape snapshot.",
+            cause=err,
+        )
+        return
+
+    latest_run_stamp = latest.get("run_stamp", "unknown")
+    latest_apps = set((latest.get("data") or {}).keys())
+
+    # Pull THIS-RUN-only history snapshot to know which apps were
+    # actually scraped (not merged-forward from a prior run). Latest
+    # /run.json mixes merged + fresh data; the matching history file
+    # only has what this run captured. If the snapshot dir doesn't
+    # exist locally (deployments don't track results/history/), fall
+    # back to the most recent chore(data) commit's run.json — that's
+    # the per-run snapshot before merge.
+    fresh_apps: set[str] = set()
+    try:
+        out = _sp.run(
+            ["git", "log", "-n", "10", "--pretty=%H %s",
+             "--", "results/latest/run.json"],
+            cwd=".", check=True, capture_output=True, text=True, timeout=8,
+        )
+        for line in (out.stdout or "").splitlines():
+            sha, _, msg = line.partition(" ")
+            if not msg.startswith("chore(data): scrape"):
+                continue
+            try:
+                blob = _sp.run(
+                    ["git", "show", f"{sha}:results/latest/run.json"],
+                    cwd=".", check=True, capture_output=True, text=True, timeout=8,
+                ).stdout
+                fresh = _json.loads(blob)
+                fresh_apps = set((fresh.get("data") or {}).keys())
+                break
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+    active_ids = {a.id for a in (app_registry.all_apps() or [])}
+    if not active_ids:
+        return
+
+    # An app is "stale" if it's in the active registry but the most
+    # recent FRESH scrape didn't capture it. Without the merge logic
+    # these would show 0 rows; with it they show prior data. Either
+    # way the admin needs to know.
+    stale_apps = sorted(active_ids - fresh_apps) if fresh_apps else []
+    # An app is "empty" if its latest run.json data is 0 rows.
+    empty_apps = sorted(
+        app_id for app_id in active_ids
+        if app_id in latest_apps and len((latest.get("data") or {}).get(app_id) or []) == 0
+    )
+
+    if not stale_apps and not empty_apps:
+        st.markdown(
+            f'<div style="padding:10px 14px; background:rgba(16,185,129,0.10); '
+            f'border-left:4px solid #10b981; border-radius:6px; '
+            f'margin:6px 0 18px 0; font-size:0.88rem;">'
+            f'<b style="color:#059669;">✓ All scrapers healthy</b> · '
+            f'<span style="color:#475569;">latest snapshot: {latest_run_stamp}</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        return
+
+    bullet_items = []
+    for app_id in stale_apps:
+        bullet_items.append(
+            f'<li><b>{app_id}</b> — last successful scrape data preserved on dashboard, '
+            f'but <span style="color:#dc2626;">most recent scheduled run did NOT capture this app</span> '
+            f'(login failure, cHAP outage, or pagination issue). Check the Runs tab.</li>'
+        )
+    for app_id in empty_apps:
+        bullet_items.append(
+            f'<li><b>{app_id}</b> — latest snapshot shows 0 rows. cHAP may have nothing to scrape, '
+            f'OR the scraper hit an error post-login. Check the Runs tab for the run output.</li>'
+        )
+    bullets = "".join(bullet_items)
+
+    st.markdown(
+        f'<div style="padding:12px 14px; background:rgba(245,158,11,0.10); '
+        f'border-left:4px solid #f59e0b; border-radius:6px; '
+        f'margin:6px 0 18px 0; font-size:0.88rem;">'
+        f'<b style="color:#b45309;">⚠ {len(stale_apps) + len(empty_apps)} app(s) need attention</b> '
+        f'<span style="color:#64748b;">· latest snapshot: {latest_run_stamp}</span>'
+        f'<ul style="margin:8px 0 0 0; padding-left:24px; color:#475569;">'
+        f'{bullets}</ul></div>',
+        unsafe_allow_html=True,
+    )
+
+
 def _render_overview_tab(principal: roles.UserPrincipal):
     top_col1, top_col2 = st.columns([3, 2])
     with top_col1:
@@ -200,6 +320,14 @@ def _render_overview_tab(principal: roles.UserPrincipal):
             st.markdown("&nbsp;")
             if st.button("▶ Run scrape now", type="primary", use_container_width=True):
                 _trigger_scrape_now(principal)
+
+    # ---- Scrape health banner --------------------------------------
+    # Surfaces apps whose latest scrape produced 0 rows OR whose data
+    # in results/latest/run.json is stale (meaning the merge logic
+    # preserved their prior rows because this run failed). Without
+    # this, a failed scheduled cron looks identical to a clean scrape
+    # — admin can't tell which apps need attention.
+    _render_scrape_health_banner()
 
     apps = app_registry.all_apps()
     if not apps:

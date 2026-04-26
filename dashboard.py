@@ -2026,7 +2026,17 @@ def main() -> None:
     )
 
     # ------------ Header + KPI row ------------
+    # `stamp` may be the synthetic "__latest__" placeholder when
+    # results/history/ is empty (e.g. fresh deploy reading only
+    # results/latest/run.json). In that case _parse_stamp_dt returns
+    # None and the header would say "Last updated · unknown". Fall
+    # back to the run.json's own `run_stamp` field, which is the real
+    # scraper-bot timestamp.
     run_dt = _parse_stamp_dt(stamp)
+    if run_dt is None:
+        embedded_stamp = (run.get("run_stamp") or "").strip()
+        if embedded_stamp:
+            run_dt = _parse_stamp_dt(embedded_stamp)
     _render_header(app_key, year, run_dt)
     st.write("")  # small breathing room between header and KPIs
 
