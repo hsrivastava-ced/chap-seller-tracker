@@ -46,7 +46,7 @@ import github_secret_updater as gh
 import roles
 from app_registry import AppEntry
 from ui_errors import show_error, show_warning, show_info, wrap_page
-from ui_theme import apply_shared_theme
+from ui_theme import apply_shared_theme, render_theme_picker
 
 
 # =================================================================
@@ -178,7 +178,8 @@ def main():
         with tabs[4]:
             _render_users_tab(principal)
 
-    # Sign out — sidebar footer.
+    # Sidebar footer: theme picker + sign out.
+    render_theme_picker()
     auth.sign_out_button(st, skip_caption=True)
 
 

@@ -37,7 +37,7 @@ import streamlit as st
 import auth
 import roles
 from ui_errors import wrap_page
-from ui_theme import apply_shared_theme
+from ui_theme import apply_shared_theme, render_theme_picker
 from analytics_advanced import (
     DISPLAY_NAMES,
     build_stakeholder_report,
@@ -2080,8 +2080,8 @@ def main() -> None:
         with st.expander("📝 Markdown digest (from pipeline.py)"):
             st.markdown(report_path.read_text(encoding="utf-8"))
 
-    # Sign out — sidebar footer, rendered last so it sits at the bottom
-    # of the column under the filter cards.
+    # Sidebar footer: theme picker + sign out.
+    render_theme_picker()
     auth.sign_out_button(st, skip_caption=True)
 
 
