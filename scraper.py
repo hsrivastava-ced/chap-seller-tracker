@@ -1210,8 +1210,33 @@ def _scrape_paginated_ant_table(
             # before declaring the list exhausted.
             if rows.count() >= 20:
                 logging.info(
-                    "   ↳ pagination bar not yet rendered; waiting up to 20s..."
+                    "   ↳ pagination bar not yet rendered; clearing stale "
+                    "popup overlays + waiting up to 30s..."
                 )
+                # Defensive: customize_grid_select_all can leave a stale
+                # inte-Select Fake panel sitting on top of the pagination
+                # footer (verified live 2026-04-26 on TEMU US — bailed
+                # with "no pagination row" while cHAP actually had 82
+                # sellers across 5 pages). Force every popup closed so
+                # the pagination bar can render unobstructed.
+                try:
+                    page.keyboard.press("Escape")
+                except Exception:
+                    pass
+                try:
+                    page.evaluate(
+                        """() => {
+                            document.querySelectorAll(
+                                'div.inte-formElement--Wrap[aria-expanded="true"]'
+                            ).forEach(el => el.setAttribute('aria-expanded', 'false'));
+                            document.querySelectorAll('div.inte-select--Fake').forEach(el => {
+                                el.style.visibility = 'hidden';
+                                el.style.opacity = '0';
+                            });
+                        }"""
+                    )
+                except Exception:
+                    pass
                 try:
                     page.wait_for_selector(
                         "div.inte-flex.inte-flex--spacing-MediumTight "
