@@ -2573,15 +2573,28 @@ def persist_results(
         _write_csv(hist_path, rows, UNINSTALL_CSV_COLUMNS)
         written["history"][key] = str(hist_path)
 
-    # For targeted runs that promote to latest/, merge with the existing
-    # latest/run.json so apps that weren't part of THIS run keep showing
-    # their last-good data on the dashboard. Without this, a TARGET_APP=
-    # shopify_temu run would wipe SHEIN/TEMU EU/SHEIN WooCommerce from
-    # results/latest/run.json. The history snapshot stays per-run (only
-    # the apps actually scraped) since it represents what THIS run did.
+    # ALWAYS merge with the existing latest/run.json (whether the run was
+    # targeted via TARGET_APP or a full-fleet scheduled cron). Apps that
+    # weren't successfully scraped THIS run — login failed, cHAP-side
+    # outage, TARGET_APP narrowed the run, etc. — keep showing their
+    # last-good data on the dashboard instead of silently disappearing.
+    #
+    # The history snapshot stays per-run (only the apps actually scraped),
+    # because it represents what THIS run did. Latest/ is the dashboard's
+    # source of truth and should reflect the freshest known good state
+    # for every CURRENTLY REGISTERED app.
+    #
+    # Filter the prior data by the active registry — apps removed from
+    # apps.yaml shouldn't keep showing forever just because they were
+    # last successfully scraped before being deregistered.
     sellers_for_latest = dict(sellers_by_app)
     uninstalls_for_latest = dict(uninstalls_by_app)
-    if is_targeted and promote_latest:
+    if promote_latest:
+        try:
+            import app_registry as _ar
+            active_ids = {a.id for a in _ar.all_apps() or []}
+        except Exception:
+            active_ids = set()  # fail open — better to keep stale data than drop everything
         prior_path = LATEST_DIR / "run.json"
         if prior_path.exists():
             try:
@@ -2589,20 +2602,26 @@ def persist_results(
                 prior_sellers = prior.get("data") or {}
                 prior_uninstalls = prior.get("uninstalls") or {}
                 for name, rows in prior_sellers.items():
+                    if active_ids and name not in active_ids:
+                        continue  # app was removed from apps.yaml
                     if name not in sellers_for_latest:
                         sellers_for_latest[name] = rows
                         logging.info(
                             f"   ↳ merge: preserving {name} ({len(rows)} sellers) "
-                            f"from previous latest snapshot."
+                            f"from previous latest snapshot — app wasn't scraped "
+                            f"this run."
                         )
                 for name, rows in prior_uninstalls.items():
+                    if active_ids and name not in active_ids:
+                        continue
                     if name not in uninstalls_for_latest:
                         uninstalls_for_latest[name] = rows
             except Exception as err:
                 logging.warning(
                     f"   ↳ merge: couldn't read previous latest/run.json "
-                    f"({err}); writing fresh (non-targeted apps will drop "
-                    f"out of the dashboard until next full scrape)."
+                    f"({err}); writing fresh (apps not scraped this run "
+                    f"will drop from the dashboard until next successful "
+                    f"scrape)."
                 )
 
     # History snapshot reflects THIS run only (audit-trail truth).
@@ -2616,9 +2635,10 @@ def persist_results(
         "data": sellers_by_app,
         "uninstalls": uninstalls_by_app,
     }
-    # Latest snapshot includes merged-forward data from non-targeted apps.
+    # Latest snapshot includes merged-forward data from apps not scraped
+    # this run (failed login, skipped, etc.).
     run_json_latest = dict(run_json_history)
-    if is_targeted and promote_latest:
+    if promote_latest:
         run_json_latest["counts"] = {
             n: len(r) for n, r in sellers_for_latest.items()
         }

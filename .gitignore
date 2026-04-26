@@ -28,9 +28,11 @@ live_test.log
 debug_dom*.txt
 error_*.png
 
-# Per-run data artifacts (code lives in-repo; data does not)
+# Per-run data artifacts (code lives in-repo; data does not).
+# `results/latest/` IS tracked — it's the dashboard's source of truth and
+# needs to be in git so Streamlit Cloud picks up fresh data on every push.
+# Only the staging + history runs are ignored (audit trail, written every
+# scrape, would balloon the repo).
 results/staging/
 results/history/
-results/latest/*.csv
-results/latest/*.json
 results/latest/INVALID_RUN.md

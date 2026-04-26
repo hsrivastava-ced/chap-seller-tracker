@@ -196,8 +196,15 @@ jobs:
               print(f"  {k}: len={len(unpacked[k])}")
           PY
 
-      - name: Run scraper
-        # scraper.py writes results/latest/ and results/history/<stamp>/.
+      - name: Run pipeline (scrape + Supabase push + analytics)
+        # pipeline.py wraps scraper.main() with the Supabase push step
+        # and the analytics report. Calling pipeline.py (not scraper.py
+        # directly) is what populates the `snapshots` table that the
+        # Customer Intelligence "What changed" delta feed reads. If
+        # Supabase env is missing or unreachable the pipeline degrades
+        # to dry-run cleanly — local CSV+JSON still get written, and
+        # the markdown report still lands in results/reports/.
+        #
         # On non-zero exit the job fails and nothing is committed — the
         # prior snapshot stays authoritative until the next successful run.
         # Credentials are inherited from $GITHUB_ENV set in the previous
@@ -214,7 +221,7 @@ jobs:
           TARGET_APP: ${{ inputs.target_app }}
         run: |
           set -e
-          python scraper.py
+          python pipeline.py
 
       - name: Summarize fresh run
         run: |
