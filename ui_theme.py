@@ -219,14 +219,26 @@ section[data-testid="stSidebar"] [data-baseweb="tag"] {{
 section[data-testid="stSidebar"] [data-baseweb="select"] svg {{
     fill: #cbd5e1 !important;
 }}
-section[data-testid="stSidebar"] [data-baseweb="tag"] {{
+/* Multiselect/select tag pills — first character ("TEMU US" → "EMU US")
+   was being clipped because BaseWeb's inner element relies on left
+   padding that any global override can strip. Fix it globally (not just
+   sidebar) and target the inner content wrapper too. */
+[data-baseweb="tag"] {{
     padding: 4px 10px !important;
     font-size: 0.85rem !important;
     line-height: 1.2 !important;
+    overflow: visible !important;
 }}
-section[data-testid="stSidebar"] [data-baseweb="tag"] span {{
-    padding: 0 !important;
+[data-baseweb="tag"] > div,
+[data-baseweb="tag"] span {{
+    padding-left: 4px !important;
+    padding-right: 4px !important;
     font-size: 0.85rem !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+}}
+[data-baseweb="tag"] > div:first-child {{
+    padding-left: 6px !important;
 }}
 
 /* --- Sidebar buttons. Primary stays indigo. Secondary becomes a
