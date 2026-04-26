@@ -243,6 +243,12 @@ def _render_sidebar(available_apps: list[str], *, principal=None) -> str:
             unsafe_allow_html=True,
         )
 
+        # ---- SIGN OUT (sidebar footer) ------------------------------
+        # Stays at the very bottom so it reads as a logout footer
+        # rather than competing with the brand/user/filter cards above.
+        st.markdown('<div style="margin-top:14px;"></div>', unsafe_allow_html=True)
+        auth.sign_out_button(st, skip_caption=True)
+
         return available_apps[pick_idx]
 
 
@@ -263,7 +269,6 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
     apply_shared_theme()
-    auth.sign_out_button(st)
 
     st.title("🎯 Customer Intelligence")
     st.caption(

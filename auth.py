@@ -93,10 +93,16 @@ def require(action: str, principal: Optional[UserPrincipal] = None) -> UserPrinc
     return principal
 
 
-def sign_out_button(st=None):
+def sign_out_button(st=None, *, skip_caption: bool = False):
     """Render a small 'Sign out' button in the sidebar.
 
     Clears the session and kicks the user back to the login screen.
+
+    `skip_caption=True` is used by pages that already render their own
+    user card (Intelligence, Dashboard) — those pages show the email
+    + role in a styled card, so the bare-text "Signed in as" caption
+    just creates visual noise above the card. When True, only the
+    Sign out button is rendered.
     """
     if st is None:
         import streamlit as st  # noqa: F811
@@ -104,8 +110,9 @@ def sign_out_button(st=None):
     if not principal:
         return
     with st.sidebar:
-        st.caption(f"Signed in as **{principal.email}**")
-        st.caption(f"Role: `{principal.role}`")
+        if not skip_caption:
+            st.caption(f"Signed in as **{principal.email}**")
+            st.caption(f"Role: `{principal.role}`")
         if st.button("Sign out", use_container_width=True):
             _do_sign_out(st)
 

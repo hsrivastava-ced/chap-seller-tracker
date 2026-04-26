@@ -146,7 +146,6 @@ def main():
 
     st.set_page_config(page_title="Admin — cHAP Seller Tracker", page_icon=":gear:", layout="wide")
     apply_shared_theme()  # same sidebar / button look as Dashboard
-    auth.sign_out_button(st)
 
     st.title("Admin")
     st.caption(
@@ -178,6 +177,9 @@ def main():
     if len(tabs) > 4:
         with tabs[4]:
             _render_users_tab(principal)
+
+    # Sign out — sidebar footer.
+    auth.sign_out_button(st, skip_caption=True)
 
 
 # =================================================================

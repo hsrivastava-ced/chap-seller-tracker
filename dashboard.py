@@ -1922,8 +1922,7 @@ def main() -> None:
     apply_shared_theme()  # shared sidebar / button look across pages
     _inject_css()
 
-    # Sidebar: identity + quick-nav links.
-    auth.sign_out_button(st)
+    # Sidebar: quick-nav cards + sign out at the bottom.
     with st.sidebar:
         st.page_link(
             "pages/Intelligence.py",
@@ -2080,6 +2079,10 @@ def main() -> None:
     if report_path.exists():
         with st.expander("📝 Markdown digest (from pipeline.py)"):
             st.markdown(report_path.read_text(encoding="utf-8"))
+
+    # Sign out — sidebar footer, rendered last so it sits at the bottom
+    # of the column under the filter cards.
+    auth.sign_out_button(st, skip_caption=True)
 
 
 if __name__ == "__main__":
