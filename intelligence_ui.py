@@ -1106,6 +1106,43 @@ def _render_delta_feed(*, app_key: str) -> None:
     )
     counts = seller_delta.summarise(events)
 
+    # ---- Three actionable rails for BD reps -----------------------------
+    # All three are derived from the same prior↔latest seller lists +
+    # uninstalls list, but separated visually so reps can scan each as
+    # its own callback list:
+    #   1. New installs   — sellers to onboard (welcome, drive setup)
+    #   2. New uninstalls — sellers who just left (call, learn why)
+    #   3. Reinstalls     — sellers who returned (re-engage, ensure stick)
+    prior_seller_ids = {s.get("seller_id") for s in prior_rows}
+    new_installs_list = [
+        s for s in latest_rows
+        if s.get("seller_id") and s.get("seller_id") not in prior_seller_ids
+    ]
+
+    # Reinstalls: present in the LATEST active seller list AND ALSO in
+    # the latest uninstalls list. Same store / email appears on both
+    # sides — they uninstalled at some point and have since installed
+    # again. The user flagged swaggboutique.com as the canonical example.
+    # Match on email (most reliable) + store-url fallback (collapses
+    # www./protocol variants).
+    def _norm(s): return (s or "").strip().lower().lstrip("https://").lstrip("http://").lstrip("www.")
+    uninst_emails = {(u.get("email") or "").strip().lower()
+                     for u in (latest_uninst or []) if u.get("email")}
+    uninst_stores = {_norm(u.get("username") or u.get("store_url") or "")
+                     for u in (latest_uninst or [])}
+    uninst_stores.discard("")
+    reinstalls_list: list[dict] = []
+    seen_re: set[str] = set()
+    for s in latest_rows:
+        sid = s.get("seller_id") or ""
+        if sid in seen_re:
+            continue
+        email = (s.get("email") or "").strip().lower()
+        store = _norm(s.get("store_url") or "")
+        if (email and email in uninst_emails) or (store and store in uninst_stores):
+            reinstalls_list.append(s)
+            seen_re.add(sid)
+
     # Coverage-gap detection runs silently — we still SUPPRESS the
     # ghost-churn events (handled inside seller_delta.compute_events
     # via the latest_uninstalls gate), but we don't surface a banner
@@ -1159,10 +1196,8 @@ def _render_delta_feed(*, app_key: str) -> None:
             unsafe_allow_html=True,
         )
 
-        # New uninstalls — render BEFORE the typed event timeline because
-        # this is the highest-priority callback list for BD reps. A seller
-        # that just left in the past 12-24h is the most-actionable lead
-        # the system can surface.
+        # New uninstalls — highest-priority callback list. A seller that
+        # just left in the past 12-24h is the single most-actionable lead.
         if new_uninstalls:
             st.markdown(
                 '<div style="margin:14px 0 8px 0; padding:10px 14px; '
@@ -1181,7 +1216,53 @@ def _render_delta_feed(*, app_key: str) -> None:
             if len(new_uninstalls) > 10:
                 st.caption(f"+ {len(new_uninstalls) - 10} more uninstalls — see the Uninstalls bucket below.")
 
-        if not events and not new_uninstalls:
+        # New installs — fresh sellers who weren't in the prior scrape.
+        # BD reps welcome them, confirm setup, and start the relationship.
+        if new_installs_list:
+            st.markdown(
+                '<div style="margin:14px 0 8px 0; padding:10px 14px; '
+                'background:rgba(16,185,129,0.08); border-left:4px solid '
+                '#10b981; border-radius:6px;">'
+                f'<b style="color:#10b981;">🌱 {len(new_installs_list)} new '
+                f'install{"s" if len(new_installs_list) != 1 else ""} since '
+                'the prior scrape</b><br>'
+                '<span style="color:#94a3b8; font-size:0.85rem;">'
+                'New sellers just installed. Welcome them, confirm their '
+                'setup is complete, and start the relationship before they '
+                'go cold.</span></div>',
+                unsafe_allow_html=True,
+            )
+            for s in new_installs_list[:10]:
+                _render_new_install_card(s)
+            if len(new_installs_list) > 10:
+                st.caption(f"+ {len(new_installs_list) - 10} more new installs.")
+
+        # Reinstalls — sellers in the active list whose email/store also
+        # shows up in the uninstalls history. They left and came back.
+        # High-leverage outreach: they've used the product, churned, and
+        # returned — talk to them about why they came back and what
+        # would make them stay.
+        if reinstalls_list:
+            st.markdown(
+                '<div style="margin:14px 0 8px 0; padding:10px 14px; '
+                'background:rgba(139,92,246,0.10); border-left:4px solid '
+                '#8b5cf6; border-radius:6px;">'
+                f'<b style="color:#8b5cf6;">🔄 {len(reinstalls_list)} '
+                f'reinstall{"s" if len(reinstalls_list) != 1 else ""} '
+                'detected (in current sellers AND uninstalls list)</b><br>'
+                '<span style="color:#94a3b8; font-size:0.85rem;">'
+                'These sellers uninstalled at some point and are back '
+                'now. Find out what changed — they\'re your best signal '
+                'on what brings sellers back, and your warmest re-engagement '
+                'leads.</span></div>',
+                unsafe_allow_html=True,
+            )
+            for s in reinstalls_list[:10]:
+                _render_reinstall_card(s)
+            if len(reinstalls_list) > 10:
+                st.caption(f"+ {len(reinstalls_list) - 10} more reinstalls.")
+
+        if not events and not new_uninstalls and not new_installs_list and not reinstalls_list:
             st.info(
                 "No flagged changes this cycle. Reps: no follow-up "
                 "events to action; check the buckets below for "
@@ -1237,6 +1318,75 @@ def _render_new_uninstall_card(u: dict) -> None:
         f'<div style="color:#64748b; font-size:0.78rem; margin-top:2px;">'
         f'seller_id: {sid}{store_line}{shops_line}'
         f'</div></div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_new_install_card(s: dict) -> None:
+    """One welcome card for a new install. Surfaces email + store + plan
+    + installed date so a BD rep can pick up the relationship cold."""
+    email = (s.get("email") or "").strip() or "—"
+    store = (s.get("store_url") or "").strip()
+    plan = (s.get("plan") or "").strip()
+    installed = (s.get("installed_on") or "").strip()
+    sid = s.get("seller_id") or ""
+    contact_bits = []
+    if email and email != "—":
+        contact_bits.append(f'<a href="mailto:{email}" style="color:#a5b4fc;">{email}</a>')
+    if store:
+        contact_bits.append(f'<span style="color:#94a3b8;">{store}</span>')
+    contact = " · ".join(contact_bits) or '<span style="color:#94a3b8;">no contact info captured</span>'
+    detail_bits = []
+    if installed:
+        detail_bits.append(f"installed {installed}")
+    if plan:
+        detail_bits.append(f"plan: <b>{plan}</b>")
+    detail_bits.append(f"seller_id: {sid}")
+    detail = " · ".join(detail_bits)
+    st.markdown(
+        f'<div style="display:flex; align-items:center; padding:10px 14px; '
+        f'margin-bottom:6px; background:#1e293b; border-radius:8px; '
+        f'border-left:3px solid #10b981;">'
+        f'<span style="font-size:1.1rem; margin-right:12px;">🌱</span>'
+        f'<div style="flex:1; min-width:0;">'
+        f'<div style="color:#e2e8f0; font-weight:600;">{contact}</div>'
+        f'<div style="color:#64748b; font-size:0.78rem; margin-top:2px;">'
+        f'{detail}</div></div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _render_reinstall_card(s: dict) -> None:
+    """Card for a reinstall — seller is currently active AND in the
+    uninstalls history. Highlights that they came back.
+    """
+    email = (s.get("email") or "").strip() or "—"
+    store = (s.get("store_url") or "").strip()
+    plan = (s.get("plan") or "").strip()
+    orders = s.get("order_count") or 0
+    sid = s.get("seller_id") or ""
+    contact_bits = []
+    if email and email != "—":
+        contact_bits.append(f'<a href="mailto:{email}" style="color:#a5b4fc;">{email}</a>')
+    if store:
+        contact_bits.append(f'<span style="color:#94a3b8;">{store}</span>')
+    contact = " · ".join(contact_bits) or '<span style="color:#94a3b8;">no contact info captured</span>'
+    detail_bits = []
+    if plan:
+        detail_bits.append(f"plan: <b>{plan}</b>")
+    if orders:
+        detail_bits.append(f"orders: <b>{orders}</b>")
+    detail_bits.append(f"seller_id: {sid}")
+    detail = " · ".join(detail_bits)
+    st.markdown(
+        f'<div style="display:flex; align-items:center; padding:10px 14px; '
+        f'margin-bottom:6px; background:#1e293b; border-radius:8px; '
+        f'border-left:3px solid #8b5cf6;">'
+        f'<span style="font-size:1.1rem; margin-right:12px;">🔄</span>'
+        f'<div style="flex:1; min-width:0;">'
+        f'<div style="color:#e2e8f0; font-weight:600;">{contact}</div>'
+        f'<div style="color:#64748b; font-size:0.78rem; margin-top:2px;">'
+        f'{detail}</div></div></div>',
         unsafe_allow_html=True,
     )
 
