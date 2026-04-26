@@ -1,19 +1,149 @@
 {
-  "run_stamp": "2026-04-25_20-13-48Z",
-  "run_started_utc": "2026-04-25T20:13:48.494340+00:00",
+  "run_stamp": "2026-04-26_18-17-38Z",
+  "run_started_utc": "2026-04-26T18:17:38.426666+00:00",
   "counts": {
+    "shopify_gearexchange": 7,
     "shein": 200,
     "shein_woocommerce": 14,
     "shopify_temu": 84
   },
-  "total": 298,
+  "total": 305,
   "uninstall_counts": {
+    "shopify_gearexchange": 1,
     "shein": 317,
     "shein_woocommerce": 0,
     "shopify_temu": 116
   },
-  "uninstall_total": 433,
+  "uninstall_total": 434,
   "data": {
+    "shopify_gearexchange": [
+      {
+        "seller_id": "69e6787097181c6b000055f6",
+        "store_url": "mojosmusic.com",
+        "username": "tom@mojosmusic.com",
+        "email": "tom@mojosmusic.com",
+        "platforms": "Shopify Gearexchange",
+        "installed_on": "20/04/2026",
+        "app_type": "",
+        "source_country": "United States",
+        "order_count": "0",
+        "product_count": "474",
+        "failed_order_count": "0",
+        "steps_completed": "0",
+        "plan": "Bronze",
+        "last_sync": "",
+        "webhooks": "View",
+        "action": ""
+      },
+      {
+        "seller_id": "698f1367d9f1ff9d010e0042",
+        "store_url": "quickstart-df621e1e.myshopify.com",
+        "username": "mahamad@threecolts.com",
+        "email": "mahamad@threecolts.com",
+        "platforms": "Shopify Gearexchange",
+        "installed_on": "13/02/2026",
+        "app_type": "",
+        "source_country": "India",
+        "order_count": "0",
+        "product_count": "6",
+        "failed_order_count": "0",
+        "steps_completed": "0",
+        "plan": "Silver",
+        "last_sync": "",
+        "webhooks": "View",
+        "action": ""
+      },
+      {
+        "seller_id": "68bf2581f34ceef7f3004381",
+        "store_url": "aflashfloodofgear.com",
+        "username": "alex@aflashfloodofgear.com",
+        "email": "alex@aflashfloodofgear.com",
+        "platforms": "Shopify Gearexchange",
+        "installed_on": "08/09/2025",
+        "app_type": "",
+        "source_country": "United States",
+        "order_count": "4",
+        "product_count": "4623",
+        "failed_order_count": "0",
+        "steps_completed": "0",
+        "plan": "Bronze",
+        "last_sync": "",
+        "webhooks": "View",
+        "action": ""
+      },
+      {
+        "seller_id": "68b9d754067c3941f30ac053",
+        "store_url": "diabloguitars.com",
+        "username": "orders@diabloguitars.com",
+        "email": "orders@diabloguitars.com",
+        "platforms": "Shopify Gearexchange",
+        "installed_on": "04/09/2025",
+        "app_type": "",
+        "source_country": "United States",
+        "order_count": "11",
+        "product_count": "1218",
+        "failed_order_count": "0",
+        "steps_completed": "0",
+        "plan": "Silver",
+        "last_sync": "",
+        "webhooks": "View",
+        "action": ""
+      },
+      {
+        "seller_id": "6887bbef33c209cfe7043dd7",
+        "store_url": "egaguitars.com",
+        "username": "jt.trevino@egaguitars.com",
+        "email": "jt.trevino@egaguitars.com",
+        "platforms": "Shopify Gearexchange",
+        "installed_on": "28/07/2025",
+        "app_type": "",
+        "source_country": "United States",
+        "order_count": "356",
+        "product_count": "2055",
+        "failed_order_count": "4",
+        "steps_completed": "0",
+        "plan": "Bronze",
+        "last_sync": "",
+        "webhooks": "View",
+        "action": ""
+      },
+      {
+        "seller_id": "687e427aad0c932c24027f72",
+        "store_url": "churchgear.com",
+        "username": "doug@churchgear.com",
+        "email": "doug@churchgear.com",
+        "platforms": "Shopify Gearexchange",
+        "installed_on": "21/07/2025",
+        "app_type": "",
+        "source_country": "United States",
+        "order_count": "278",
+        "product_count": "6733",
+        "failed_order_count": "2",
+        "steps_completed": "0",
+        "plan": "Silver",
+        "last_sync": "",
+        "webhooks": "View",
+        "action": ""
+      },
+      {
+        "seller_id": "68597487fec3319f380a2fb1",
+        "store_url": "1rrvud-cb.myshopify.com",
+        "username": "jeff_scantlin@sweetwater.com",
+        "email": "jeff_scantlin@sweetwater.com",
+        "platforms": "Shopify Gearexchange",
+        "installed_on": "23/06/2025",
+        "app_type": "",
+        "source_country": "United States",
+        "order_count": "3187",
+        "product_count": "3850",
+        "failed_order_count": "31",
+        "steps_completed": "0",
+        "plan": "Silver",
+        "last_sync": "",
+        "webhooks": "View",
+        "action": ""
+      }
+    ],
     "shein": [
       {
         "seller_id": "69e84b4d42fb3e0838085872",
@@ -5386,6 +5516,16 @@
     ]
   },
   "uninstalls": {
+    "shopify_gearexchange": [
+      {
+        "seller_id": "682dd780d2547f3d5d09204a",
+        "email": "chrissy_pearl@sweetwater.com",
+        "username": "chrissy_pearl@sweetwater.com",
+        "platform": "Shopify",
+        "uninstalled_on": "2025-06-17 17:33:20",
+        "shops_raw": "Shopify 2025-06-17 17:33:20"
+      }
+    ],
     "shein": [
       {
         "seller_id": "65de0a6c4e79a983f5098c22",
