@@ -1106,18 +1106,26 @@ def _render_delta_feed(*, app_key: str) -> None:
     )
     counts = seller_delta.summarise(events)
 
-    # Coverage-gap detection: count sellers missing from latest that
-    # are NOT in uninstalls — those are sellers the scraper failed to
-    # capture this run. Surface a warning so reps don't take the
-    # absence of churn events as "all sellers retained".
+    # Coverage-gap detection runs silently — we still SUPPRESS the
+    # ghost-churn events (handled inside seller_delta.compute_events
+    # via the latest_uninstalls gate), but we don't surface a banner
+    # to the audience. Failure mode of a scraper bug shouldn't be
+    # broadcast on the BD-rep dashboard. Super admins see the same
+    # thing reflected in the run report under Admin → Runs.
     prior_ids = {s.get("seller_id") for s in prior_rows}
     latest_ids = {s.get("seller_id") for s in latest_rows}
     uninst_ids = {u.get("seller_id") for u in (latest_uninst or [])}
     ghost_count = len(prior_ids - latest_ids - uninst_ids)
-    coverage_gap = ghost_count > 5 or (
+    coverage_gap_silent = ghost_count > 5 or (
         prior_rows and len(latest_rows) < 0.85 * len(prior_rows)
         and ghost_count > 0
     )
+    if coverage_gap_silent:
+        logging.warning(
+            f"intelligence: scrape coverage gap detected for {app_key} — "
+            f"{ghost_count} prior sellers missing from latest scrape "
+            f"and absent from uninstalls. Ghost-churn suppressed."
+        )
 
     # Headline strip — counts per kind.
     def _pill(kind: str) -> str:
@@ -1141,9 +1149,8 @@ def _render_delta_feed(*, app_key: str) -> None:
         )
 
     with st.expander(
-        f"⚡ What changed (day-over-day) · {len(events)} events"
-        + (" · ⚠ scrape coverage gap" if coverage_gap else ""),
-        expanded=len(events) > 0 or coverage_gap,
+        f"⚡ What changed (day-over-day) · {len(events)} events",
+        expanded=len(events) > 0,
     ):
         st.markdown(
             f'<div style="color:#94a3b8; font-size:0.8rem; '
@@ -1151,33 +1158,6 @@ def _render_delta_feed(*, app_key: str) -> None:
             f'vs <b>{prior_stamp or "prior"}</b></div>{strip}',
             unsafe_allow_html=True,
         )
-
-        # Coverage-gap warning — surfaces when the latest scrape captured
-        # noticeably fewer rows than the prior one AND those missing
-        # sellers AREN'T in the uninstalls list. This is almost always
-        # a scraper bug (pagination, dropdown, login retry), not real
-        # churn. Without this warning the empty event timeline would
-        # look like "everyone retained ✅" when actually we just lost
-        # visibility on N sellers.
-        if coverage_gap:
-            st.markdown(
-                f'<div style="margin:8px 0 12px 0; padding:12px 14px; '
-                f'background:rgba(245,158,11,0.10); border-left:4px '
-                f'solid #f59e0b; border-radius:6px;">'
-                f'<b style="color:#f59e0b;">⚠ Scrape coverage gap · '
-                f'{ghost_count} seller{"s" if ghost_count != 1 else ""} '
-                f'missing from this run</b><br>'
-                f'<span style="color:#94a3b8; font-size:0.85rem;">'
-                f'These sellers were in the prior scrape '
-                f'({len(prior_rows)} sellers) but not in this one '
-                f'({len(latest_rows)} sellers), AND they don\'t appear '
-                f'in the uninstalls list — meaning they\'re likely '
-                f'still active in cHAP and the scraper just missed them. '
-                f'Real churn requires an entry in the uninstalls list. '
-                f'Treat the events below as <b>partial</b> until the '
-                f'next clean scrape.</span></div>',
-                unsafe_allow_html=True,
-            )
 
         # New uninstalls — render BEFORE the typed event timeline because
         # this is the highest-priority callback list for BD reps. A seller
@@ -1261,35 +1241,68 @@ def _render_new_uninstall_card(u: dict) -> None:
     )
 
 
+_EVENT_PLAIN_LANGUAGE = {
+    "new_install": "Just installed — onboard them and confirm setup.",
+    "churned": "Uninstalled. Reach out today to learn why.",
+    "plan_upgrade": "Upgraded to a paid plan — strong success signal.",
+    "plan_downgrade": "Dropped to a free plan — engagement at risk.",
+    "plan_change": "Switched plans — confirm intent matches their growth.",
+    "order_spike": (
+        "Order volume jumped sharply since the last scrape — momentum "
+        "signal, good time to upsell or check in."
+    ),
+    "failed_order_spike": (
+        "Failed-order count is climbing. Sustained failures usually "
+        "precede an uninstall — reach out to debug their integration "
+        "before they leave."
+    ),
+}
+
+
 def _render_delta_event_card(ev) -> None:
-    """One row per event — dark card with left color-bar."""
+    """One row per event — dark card with left color-bar.
+
+    Plain-language explanation lives BELOW the metric so any reader
+    (BD rep, super admin, exec) understands what the event means
+    without needing to know what 'failed_order_spike' is internally.
+    """
     emoji, color, label = _DELTA_STYLE.get(ev.kind, ("·", "#94a3b8", ev.kind))
-    # Plan change sub-line.
+
+    # Plan change sub-line — only render when there's an actual plan
+    # value on at least one side. Empty/N-A plans are noise.
+    def _is_real(p): return bool((p or "").strip()) and (p or "").strip().lower() not in {"n/a", "—", "-", "none"}
     plan_line = ""
-    if ev.plan_before or ev.plan_after:
-        if ev.kind in ("plan_upgrade", "plan_downgrade", "plan_change"):
+    if ev.kind in ("plan_upgrade", "plan_downgrade", "plan_change"):
+        if _is_real(ev.plan_before) or _is_real(ev.plan_after):
             plan_line = (
                 f'<span style="color:#94a3b8;">plan:</span> '
                 f'<b>{ev.plan_before or "—"} → {ev.plan_after or "—"}</b>'
             )
-        elif ev.plan_after:
-            plan_line = f'<span style="color:#94a3b8;">plan:</span> <b>{ev.plan_after}</b>'
-        elif ev.plan_before:
-            plan_line = f'<span style="color:#94a3b8;">was on:</span> <b>{ev.plan_before}</b>'
+    elif _is_real(ev.plan_after):
+        plan_line = f'<span style="color:#94a3b8;">plan:</span> <b>{ev.plan_after}</b>'
+    elif _is_real(ev.plan_before):
+        plan_line = f'<span style="color:#94a3b8;">was on:</span> <b>{ev.plan_before}</b>'
 
-    # Magnitude sub-line.
+    # Magnitude sub-line — relabel by event kind so the count is
+    # self-describing. "Failed orders" reads better than "count".
     mag_line = ""
     if ev.value_before is not None and ev.value_after is not None:
         delta = ev.value_after - ev.value_before
         sign = "+" if delta > 0 else ""
+        metric_label = {
+            "failed_order_spike": "failed orders",
+            "order_spike": "orders",
+        }.get(ev.kind, "count")
         mag_line = (
-            f'<span style="color:#94a3b8;">count:</span> '
+            f'<span style="color:#94a3b8;">{metric_label}:</span> '
             f'<b>{ev.value_before} → {ev.value_after}</b> '
             f'<span style="color:{color};">({sign}{delta})</span>'
         )
 
     meta_bits = [x for x in (plan_line, mag_line) if x]
     meta_line = "  ·  ".join(meta_bits)
+
+    explainer = _EVENT_PLAIN_LANGUAGE.get(ev.kind, "")
 
     identity = ev.store_url or ev.username or ev.email or ev.seller_id
 
@@ -1308,6 +1321,11 @@ def _render_delta_event_card(ev) -> None:
             f'<div style="color:#94a3b8; font-size:0.8rem; '
             f'margin-top:3px;">{meta_line}</div>'
             if meta_line else ""
+        )
+        + (
+            f'<div style="color:#cbd5e1; font-size:0.8rem; '
+            f'margin-top:5px; line-height:1.45;">{explainer}</div>'
+            if explainer else ""
         )
         + f'</div></div>',
         unsafe_allow_html=True,

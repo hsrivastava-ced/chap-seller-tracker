@@ -2069,18 +2069,12 @@ def set_page_size_100(page, app_name: str) -> bool:
     except Exception:
         current = ""
 
-    # Snapshot the row count / first-row key so we can detect the reload.
+    # Snapshot the row count so we can log "rows visible now: N (was M)".
     rows = page.locator("tr.ant-table-row")
     try:
         prev_rows_count = rows.count()
     except Exception:
         prev_rows_count = 0
-    prev_first_key = ""
-    try:
-        if prev_rows_count > 0:
-            prev_first_key = rows.nth(0).get_attribute("data-row-key") or ""
-    except Exception:
-        pass
 
     # --- Open the dropdown ---
     trigger = sorter.locator(
@@ -2220,16 +2214,25 @@ def set_page_size_100(page, app_name: str) -> bool:
     # --- Wait for the table to actually reload with the new page size ---
     # The admin panel fires a new request, rebuilds the tbody, and updates
     # the "Showing 1 - N of TOTAL" text. User flagged this can take 20–30s
-    # on slow runs, so we hedge up to 45s. Signals we accept (whichever
-    # arrives first):
-    #   (a) the "Showing 1 - N" row count exceeds 20, OR
-    #   (b) the first-row data-row-key changes (fresh tbody render), OR
-    #   (c) the pagination "of N" total pages drops (4 on shein = good).
+    # on slow runs, so we hedge up to 45s.
+    #
+    # CRITICAL: the only acceptable signal is rows-visible > 20. Other
+    # signals previously accepted (first-row key changed; "of N" total
+    # pages low) can fire BEFORE the table actually reloads — verified
+    # 2026-04-26: SHEIN scrape captured 20 rows on page 1 (old size),
+    # then 100 rows on page 2 (new size kicked in), missing rows 21-100
+    # entirely. The race was that set_page_size_100 returned settled=True
+    # while the tbody was still on its 20-row state, the row scraper
+    # immediately read page 1 (got 20), then clicked Next which advanced
+    # to row 101 because the new page size was now in effect.
+    #
+    # Requiring explicit row-count proof closes that race.
     settled = False
     try:
         page.wait_for_function(
-            """(prev) => {
-                // (a) Showing 1 - N of TOTAL  -> N > 20 means new page size stuck
+            """() => {
+                // (a) Showing 1 - N of TOTAL — N must exceed 20 to prove the
+                //     new page size is actually in effect.
                 const showing = document.querySelector(
                     'div.inte-Pagination div.inte-flex__item > span'
                 );
@@ -2238,30 +2241,53 @@ def set_page_size_100(page, app_name: str) -> bool:
                     const m = parent.textContent.match(/Showing\\s+\\d+\\s*-\\s*(\\d+)\\s+of/);
                     if (m && parseInt(m[1], 10) > 20) return true;
                 }
-                // (b) first-row key changed  -> tbody re-rendered
-                const r = document.querySelector('tr.ant-table-row');
-                if (r && prev && r.getAttribute('data-row-key') !== prev) return true;
-                // (c) DOM might also expose total-pages via pag input; the
-                //     "of N" text is a sibling. Check for count reduction:
-                const items = document.querySelectorAll(
-                    'div.inte-Pagination div.inte-flex__item'
-                );
-                for (const it of items) {
-                    const mt = it.textContent.match(/^of\\s+(\\d+)$/);
-                    if (mt && parseInt(mt[1], 10) <= 5) return true;
-                }
+                // (b) tbody actually has > 20 rows now (only counts when
+                //     the total seller pool is itself > 20; if the app has
+                //     ≤ 20 sellers, signal (a) above won't fire either —
+                //     fall through to the small-table escape hatch below).
+                const rows = document.querySelectorAll('tr.ant-table-row');
+                if (rows.length > 20) return true;
                 return false;
             }""",
-            arg=prev_first_key,
             timeout=45000,
         )
         settled = True
     except PwTimeout:
-        logging.warning(
-            f"   ↳ page-size reload signal never observed within 45s for "
-            f"{app_name}; the scrape will still run but may be on the old "
-            "page size"
-        )
+        # Edge case: the app legitimately has ≤ 20 sellers total, so the
+        # row count will never exceed 20 regardless of page size. In that
+        # case the scrape works correctly at the default size — confirm
+        # by checking the total-rows text. If pagination reports a single
+        # page AND total rows ≤ 20, treat the run as settled (small
+        # tables don't need the page-size flip).
+        try:
+            small_table = page.evaluate(
+                """() => {
+                    const items = document.querySelectorAll(
+                        'div.inte-Pagination div.inte-flex__item'
+                    );
+                    let totalPages = null;
+                    for (const it of items) {
+                        const m = it.textContent.match(/^of\\s+(\\d+)$/);
+                        if (m) { totalPages = parseInt(m[1], 10); break; }
+                    }
+                    const rowCount = document.querySelectorAll('tr.ant-table-row').length;
+                    return totalPages === 1 && rowCount > 0 && rowCount <= 20;
+                }"""
+            )
+        except Exception:
+            small_table = False
+        if small_table:
+            logging.info(
+                f"   ↳ {app_name} has ≤ 20 sellers total — page size flip is "
+                f"a no-op for this app; treating as settled."
+            )
+            settled = True
+        else:
+            logging.warning(
+                f"   ↳ page-size reload signal never observed within 45s for "
+                f"{app_name}; the scrape will still run but may be on the old "
+                "page size"
+            )
 
     # Tiny settle so the scraper's first-page header-map build sees a
     # stable thead/tbody instead of a mid-reflow snapshot.
