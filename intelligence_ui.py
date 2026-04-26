@@ -1125,10 +1125,15 @@ def _render_delta_feed(*, app_key: str) -> None:
     # again. The user flagged swaggboutique.com as the canonical example.
     # Match on email (most reliable) + store-url fallback (collapses
     # www./protocol variants).
-    def _norm(s): return (s or "").strip().lower().lstrip("https://").lstrip("http://").lstrip("www.")
+    def _norm_url(s: str) -> str:
+        s = (s or "").strip().lower()
+        for prefix in ("https://", "http://", "www."):
+            if s.startswith(prefix):
+                s = s[len(prefix):]
+        return s.rstrip("/")
     uninst_emails = {(u.get("email") or "").strip().lower()
                      for u in (latest_uninst or []) if u.get("email")}
-    uninst_stores = {_norm(u.get("username") or u.get("store_url") or "")
+    uninst_stores = {_norm_url(u.get("username") or u.get("store_url") or "")
                      for u in (latest_uninst or [])}
     uninst_stores.discard("")
     reinstalls_list: list[dict] = []
@@ -1138,10 +1143,27 @@ def _render_delta_feed(*, app_key: str) -> None:
         if sid in seen_re:
             continue
         email = (s.get("email") or "").strip().lower()
-        store = _norm(s.get("store_url") or "")
+        store = _norm_url(s.get("store_url") or "")
         if (email and email in uninst_emails) or (store and store in uninst_stores):
             reinstalls_list.append(s)
             seen_re.add(sid)
+
+    # Install-time stats lookup for the new-uninstall cards. cHAP's
+    # uninstalls table drops plan/order_count/product_count, but our
+    # active-sellers history (prior_rows) still has it for sellers
+    # that were active in the prior scrape. Build a quick index by
+    # email + normalised store-url so each new-uninstall card can show
+    # what the seller was worth at install time — lifetime orders +
+    # plan are the most useful signals for win-back outreach.
+    install_index_by_email: dict[str, dict] = {}
+    install_index_by_store: dict[str, dict] = {}
+    for s in prior_rows:
+        em = (s.get("email") or "").strip().lower()
+        st_url = _norm_url(s.get("store_url") or "")
+        if em:
+            install_index_by_email[em] = s
+        if st_url:
+            install_index_by_store[st_url] = s
 
     # Coverage-gap detection runs silently — we still SUPPRESS the
     # ghost-churn events (handled inside seller_delta.compute_events
@@ -1212,7 +1234,11 @@ def _render_delta_feed(*, app_key: str) -> None:
                 unsafe_allow_html=True,
             )
             for u in new_uninstalls[:10]:
-                _render_new_uninstall_card(u)
+                _render_new_uninstall_card(
+                    u,
+                    install_by_email=install_index_by_email,
+                    install_by_store=install_index_by_store,
+                )
             if len(new_uninstalls) > 10:
                 st.caption(f"+ {len(new_uninstalls) - 10} more uninstalls — see the Uninstalls bucket below.")
 
@@ -1292,32 +1318,105 @@ def _render_delta_feed(*, app_key: str) -> None:
                 )
 
 
-def _render_new_uninstall_card(u: dict) -> None:
+def _render_new_uninstall_card(
+    u: dict,
+    *,
+    install_by_email: dict | None = None,
+    install_by_store: dict | None = None,
+) -> None:
     """Compact card for one newly-uninstalled seller — what BD reps need
-    to call/email today. Surface the most contactable details first."""
+    to call/email today.
+
+    Joins back to the prior active-sellers list (via email or store URL)
+    to surface the seller's plan + lifetime orders + product count at
+    the time of uninstall — cHAP drops these on the uninstalls page,
+    so without this join BD reps would see "uninstalled" with no
+    context on the seller's value. The install-time data answers
+    "was this a small free-plan seller or a 4,000-order Pro account?"
+    which dictates how the rep prioritises the callback.
+    """
     email = u.get("email") or u.get("user_email") or "—"
     username = u.get("username") or ""
-    store = u.get("store_url") or u.get("shop") or ""
+    store_field = u.get("store_url") or u.get("shop") or ""
     sid = u.get("seller_id") or ""
-    shops = u.get("shops") or ""
+    uninstalled_on = (u.get("uninstalled_on") or "").strip()
+    platform = (u.get("platform") or "").strip()
+
     contact_bits = []
     if email and email != "—":
         contact_bits.append(f'<a href="mailto:{email}" style="color:#a5b4fc;">{email}</a>')
     if username:
-        contact_bits.append(f'<span style="color:#94a3b8;">@ {username}</span>')
+        contact_bits.append(f'<span style="color:#94a3b8;">{username}</span>')
     contact = " · ".join(contact_bits) or '<span style="color:#94a3b8;">no contact info captured</span>'
-    store_line = f' · <span style="color:#94a3b8;">{store}</span>' if store else ""
-    shops_line = f' · <span style="color:#94a3b8;">shops: {shops}</span>' if shops else ""
+
+    # --- Look up install-time stats by email or store URL -------------
+    install_row: dict = {}
+    if install_by_email and email and email != "—":
+        install_row = install_by_email.get(email.strip().lower(), {}) or {}
+    if not install_row and install_by_store:
+        # store_url may be in either `username` (cHAP uninstall row's
+        # store-URL column) or `store_url` (uninstall variants).
+        for candidate in (username, store_field):
+            if not candidate:
+                continue
+            cand = (candidate or "").strip().lower()
+            for prefix in ("https://", "http://", "www."):
+                if cand.startswith(prefix):
+                    cand = cand[len(prefix):]
+            cand = cand.rstrip("/")
+            if cand in install_by_store:
+                install_row = install_by_store[cand]
+                break
+
+    # --- Build the "what they were worth" sub-line --------------------
+    stat_bits = []
+    plan = (install_row.get("plan") or "").strip()
+    orders = install_row.get("order_count")
+    products = install_row.get("product_count")
+    failed = install_row.get("failed_order_count")
+    if plan and plan.lower() not in {"n/a", "—", "-", "none"}:
+        stat_bits.append(f'plan: <b>{plan}</b>')
+    if orders not in (None, "", 0, "0"):
+        try:
+            stat_bits.append(f'lifetime orders: <b>{int(orders):,}</b>')
+        except (ValueError, TypeError):
+            pass
+    if products not in (None, "", 0, "0"):
+        try:
+            stat_bits.append(f'products: <b>{int(products):,}</b>')
+        except (ValueError, TypeError):
+            pass
+    if failed not in (None, "", 0, "0"):
+        try:
+            stat_bits.append(f'failed orders: <b>{int(failed):,}</b>')
+        except (ValueError, TypeError):
+            pass
+    stats_line = " · ".join(stat_bits)
+
+    meta_bits = []
+    if uninstalled_on:
+        meta_bits.append(f'uninstalled {uninstalled_on}')
+    if platform:
+        meta_bits.append(f'via {platform}')
+    meta_bits.append(f'seller_id: {sid}')
+    meta_line = " · ".join(meta_bits)
+
+    # --- Render -------------------------------------------------------
+    stats_html = (
+        f'<div style="color:#cbd5e1; font-size:0.82rem; margin-top:3px;">'
+        f'<span style="color:#94a3b8;">at uninstall:</span> {stats_line}</div>'
+        if stats_line else ""
+    )
     st.markdown(
-        f'<div style="display:flex; align-items:center; padding:10px 14px; '
+        f'<div style="display:flex; align-items:flex-start; padding:10px 14px; '
         f'margin-bottom:6px; background:#1e293b; border-radius:8px; '
         f'border-left:3px solid #ef4444;">'
-        f'<span style="font-size:1.1rem; margin-right:12px;">📞</span>'
+        f'<span style="font-size:1.1rem; margin-right:12px; line-height:1.3;">📞</span>'
         f'<div style="flex:1; min-width:0;">'
         f'<div style="color:#e2e8f0; font-weight:600;">{contact}</div>'
-        f'<div style="color:#64748b; font-size:0.78rem; margin-top:2px;">'
-        f'seller_id: {sid}{store_line}{shops_line}'
-        f'</div></div></div>',
+        f'{stats_html}'
+        f'<div style="color:#64748b; font-size:0.76rem; margin-top:3px;">'
+        f'{meta_line}</div></div></div>',
         unsafe_allow_html=True,
     )
 
