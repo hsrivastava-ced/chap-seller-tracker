@@ -175,9 +175,17 @@ def compute_events(
             # accurate for real tier hierarchy; we just report both
             # sides and let the UI label it, since plan-tier ordering
             # is cHAP-specific).
+            #
+            # Skip transitions to/from empty values — those are almost
+            # always Customize Grid having lost the Plan column on one
+            # of the two scrapes (data quality, not a real plan change).
+            # Verified 2026-04-26: a single SHEIN scrape produced 87
+            # "Basic → N/A" / "Starter → N/A" events purely because the
+            # latest run failed to tick the Plan Details column.
             prev_plan = _plan_of(prev_row)
             now_plan = _plan_of(now_row)
-            if prev_plan != now_plan:
+            _missing_plan = lambda p: not (p or "").strip() or (p or "").strip().lower() in {"n/a", "—", "-", "none"}
+            if prev_plan != now_plan and not _missing_plan(prev_plan) and not _missing_plan(now_plan):
                 # Classify upgrade vs downgrade using "paid → free" and
                 # "free → paid" as the only reliable directional signal.
                 # Everything else is "changed".

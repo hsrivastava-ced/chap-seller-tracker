@@ -1033,8 +1033,21 @@ def _render_delta_feed(*, app_key: str) -> None:
         seller_delta_source.from_supabase(sb, app_name=app_key)
     )
 
-    # If Supabase has < 2 rows for this app (e.g. this app was just
-    # onboarded), try local history as a secondary source.
+    # If Supabase has < 2 rows for this app, fall back to git history of
+    # results/latest/run.json. The scraper-bot commits one snapshot per
+    # successful run as `chore(data): scrape …`, so two consecutive
+    # commits give us a 100% reliable diff source — this works on
+    # Streamlit Cloud immediately without any external service.
+    if not prior_rows or not latest_rows:
+        p_stamp, l_stamp, p_rows, l_rows = (
+            seller_delta_source.from_git_history(ROOT, app_name=app_key)
+        )
+        if p_rows and l_rows:
+            prior_stamp, latest_stamp = p_stamp, l_stamp
+            prior_rows, latest_rows = p_rows, l_rows
+
+    # Final fallback: local results/history/<stamp>/run.json (only useful
+    # on dev machines where the scraper has been run locally).
     if not prior_rows or not latest_rows:
         p_stamp, l_stamp, p_rows, l_rows = (
             seller_delta_source.from_local_history(
@@ -1044,6 +1057,28 @@ def _render_delta_feed(*, app_key: str) -> None:
         if p_rows and l_rows:
             prior_stamp, latest_stamp = p_stamp, l_stamp
             prior_rows, latest_rows = p_rows, l_rows
+
+    # Same multi-source chain for the uninstalls list — different key
+    # in run.json. New uninstalls (in latest but not prior) are the
+    # single highest-value lead the BD reps can action: those sellers
+    # just left, and the team should reach out today to learn why.
+    new_uninstalls: list[dict] = []
+    try:
+        _, _, prior_uninst, latest_uninst = (
+            seller_delta_source.from_git_history_uninstalls(
+                ROOT, app_name=app_key,
+            )
+        )
+        if latest_uninst:
+            prior_ids = {u.get("seller_id") for u in (prior_uninst or [])}
+            seen: set = set()
+            for u in latest_uninst:
+                sid = u.get("seller_id")
+                if sid and sid not in prior_ids and sid not in seen:
+                    seen.add(sid)
+                    new_uninstalls.append(u)
+    except Exception as err:
+        logging.debug(f"new-uninstalls lookup failed for {app_key}: {err}")
 
     if not prior_rows or not latest_rows:
         with st.expander(
@@ -1093,7 +1128,29 @@ def _render_delta_feed(*, app_key: str) -> None:
             unsafe_allow_html=True,
         )
 
-        if not events:
+        # New uninstalls — render BEFORE the typed event timeline because
+        # this is the highest-priority callback list for BD reps. A seller
+        # that just left in the past 12-24h is the most-actionable lead
+        # the system can surface.
+        if new_uninstalls:
+            st.markdown(
+                '<div style="margin:14px 0 8px 0; padding:10px 14px; '
+                'background:rgba(239,68,68,0.08); border-left:4px solid '
+                '#ef4444; border-radius:6px;">'
+                f'<b style="color:#ef4444;">📞 {len(new_uninstalls)} new '
+                f'uninstall{"s" if len(new_uninstalls) != 1 else ""} since '
+                'the prior scrape</b><br>'
+                '<span style="color:#94a3b8; font-size:0.85rem;">'
+                'These sellers just uninstalled. Reach out today to learn '
+                'why and what would bring them back.</span></div>',
+                unsafe_allow_html=True,
+            )
+            for u in new_uninstalls[:10]:
+                _render_new_uninstall_card(u)
+            if len(new_uninstalls) > 10:
+                st.caption(f"+ {len(new_uninstalls) - 10} more uninstalls — see the Uninstalls bucket below.")
+
+        if not events and not new_uninstalls:
             st.info(
                 "No flagged changes this cycle. Reps: no follow-up "
                 "events to action; check the buckets below for "
@@ -1101,25 +1158,56 @@ def _render_delta_feed(*, app_key: str) -> None:
             )
             return
 
-        st.write("")
-        # Render up to 40 events, newest-kind-first (groups of the
-        # same kind stay clustered). Reps scan this as a timeline.
-        kind_order = list(_DELTA_STYLE.keys())
-        events_sorted = sorted(
-            events,
-            key=lambda e: (
-                kind_order.index(e.kind) if e.kind in kind_order else 99,
-                -(e.value_after or 0),
-            ),
-        )
-        for ev in events_sorted[:40]:
-            _render_delta_event_card(ev)
-        if len(events) > 40:
-            st.caption(
-                f"+ {len(events) - 40} more events. Run a query on "
-                "`public.snapshots` for the full diff, or narrow the "
-                "app in the sidebar."
+        if events:
+            st.write("")
+            # Render up to 40 events, newest-kind-first (groups of the
+            # same kind stay clustered). Reps scan this as a timeline.
+            kind_order = list(_DELTA_STYLE.keys())
+            events_sorted = sorted(
+                events,
+                key=lambda e: (
+                    kind_order.index(e.kind) if e.kind in kind_order else 99,
+                    -(e.value_after or 0),
+                ),
             )
+            for ev in events_sorted[:40]:
+                _render_delta_event_card(ev)
+            if len(events) > 40:
+                st.caption(
+                    f"+ {len(events) - 40} more events. Run a query on "
+                    "`public.snapshots` for the full diff, or narrow the "
+                    "app in the sidebar."
+                )
+
+
+def _render_new_uninstall_card(u: dict) -> None:
+    """Compact card for one newly-uninstalled seller — what BD reps need
+    to call/email today. Surface the most contactable details first."""
+    email = u.get("email") or u.get("user_email") or "—"
+    username = u.get("username") or ""
+    store = u.get("store_url") or u.get("shop") or ""
+    sid = u.get("seller_id") or ""
+    shops = u.get("shops") or ""
+    contact_bits = []
+    if email and email != "—":
+        contact_bits.append(f'<a href="mailto:{email}" style="color:#a5b4fc;">{email}</a>')
+    if username:
+        contact_bits.append(f'<span style="color:#94a3b8;">@ {username}</span>')
+    contact = " · ".join(contact_bits) or '<span style="color:#94a3b8;">no contact info captured</span>'
+    store_line = f' · <span style="color:#94a3b8;">{store}</span>' if store else ""
+    shops_line = f' · <span style="color:#94a3b8;">shops: {shops}</span>' if shops else ""
+    st.markdown(
+        f'<div style="display:flex; align-items:center; padding:10px 14px; '
+        f'margin-bottom:6px; background:#1e293b; border-radius:8px; '
+        f'border-left:3px solid #ef4444;">'
+        f'<span style="font-size:1.1rem; margin-right:12px;">📞</span>'
+        f'<div style="flex:1; min-width:0;">'
+        f'<div style="color:#e2e8f0; font-weight:600;">{contact}</div>'
+        f'<div style="color:#64748b; font-size:0.78rem; margin-top:2px;">'
+        f'seller_id: {sid}{store_line}{shops_line}'
+        f'</div></div></div>',
+        unsafe_allow_html=True,
+    )
 
 
 def _render_delta_event_card(ev) -> None:
