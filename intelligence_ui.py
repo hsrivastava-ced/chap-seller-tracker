@@ -218,12 +218,23 @@ def _render_sidebar(available_apps: list[str], *, principal=None) -> str:
             st.markdown("</div>", unsafe_allow_html=True)
             return ""
 
+        # Default app preference: SHEIN. The user explicitly asked for
+        # SHEIN to be the default on every page reload, so reps land on
+        # the busiest panel without an extra click. Falls back to
+        # whatever's first if SHEIN isn't in this run's data (e.g.
+        # SHEIN scrape failed). Persisted across reruns via session_state.
+        DEFAULT_APP = "shein"
+        if DEFAULT_APP in available_apps:
+            default_idx = available_apps.index(DEFAULT_APP)
+        else:
+            default_idx = 0
         # Single-select: each bucket table is app-scoped.
         pick_idx = st.selectbox(
             "App",
             options=list(range(len(available_apps))),
+            index=default_idx,
             format_func=lambda i: display_name(available_apps[i]),
-            help="Pick the app whose sellers you want to work today.",
+            help="Pick the app whose sellers you want to work today. Defaults to SHEIN.",
         )
         st.markdown("</div>", unsafe_allow_html=True)
 

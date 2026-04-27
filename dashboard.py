@@ -457,8 +457,19 @@ def _list_run_stamps() -> list[str]:
     return []
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, ttl=120)
 def _load_run(stamp: str) -> dict[str, Any]:
+    """Cached for 2 minutes. The synthetic `__latest__` stamp is the
+    same literal string every load (so the cache key never changes),
+    but the underlying `results/latest/run.json` does change on every
+    new chore(data) commit. Without the TTL, Streamlit Cloud would
+    serve a stale snapshot until the dyno restarts — verified live
+    2026-04-27: the dashboard's "Last updated" was stuck on Apr 25
+    even though run.json on origin already had Apr 26's run_stamp.
+    A 2-minute TTL keeps the load fast for back-to-back reruns
+    (filter changes etc.) while still picking up fresh data within
+    one tick of the scheduled cron.
+    """
     path = (
         LATEST_RUN_FILE if stamp == _LATEST_STAMP
         else HISTORY_DIR / stamp / "run.json"
@@ -913,20 +924,24 @@ def _render_sidebar(
         st.markdown('<div class="sidebar-section">Filters</div>',
                     unsafe_allow_html=True)
 
-        # Multi-select across every configured app. No more "All Apps"
-        # pseudo-option — the user explicitly picks which apps to include.
-        # Default is the FIRST app in the registry order (shopify_temu
-        # → TEMU US by current apps.yaml order). Stakeholders wanted
-        # the dashboard to open on a single real app rather than an
-        # all-app aggregate — they can then add more apps to compare.
+        # Multi-select across every configured app. Default is SHEIN
+        # (per user request 2026-04-27): the busiest panel by seller
+        # count, so reps land on the most-actionable view without an
+        # extra click. Falls back to the first available app if SHEIN
+        # isn't in this run's data.
+        DEFAULT_APP = "shein"
+        if DEFAULT_APP in available_apps:
+            default_apps = [DEFAULT_APP]
+        else:
+            default_apps = [available_apps[0]] if available_apps else []
         selected_apps = st.multiselect(
             "Apps",
             options=available_apps,
-            default=[available_apps[0]] if available_apps else [],
+            default=default_apps,
             format_func=display_name,
             help=(
                 "Pick one or more apps to focus on. The dashboard "
-                "opens on the first app; add more to compare side by "
+                "opens on SHEIN by default; add more to compare side by "
                 "side, or select all for the combined view."
             ),
         )
