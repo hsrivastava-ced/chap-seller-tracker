@@ -48,3 +48,14 @@ apps:
   schema_status: pending_review
   notes: ''
   shared_schedule: false
+- id: michael
+  label: Michael
+  dropdown_value: michael
+  scrape_installs: true
+  scrape_uninstalls: true
+  creds_ref: APP_6
+  added_by: vroy@threecolts.com
+  added_at: '2026-04-27T16:18:46+00:00'
+  schema_status: pending_review
+  notes: ''
+  shared_schedule: false
