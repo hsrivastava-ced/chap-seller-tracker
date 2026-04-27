@@ -1280,21 +1280,67 @@ def _scrape_paginated_ant_table(
 
         # Best-effort current-page indicator: the <input> in the pagination
         # bar shows the active page number. We read it to detect page skips
-        # (e.g. a retry-click race landing two transitions in a row).
-        # Logged-only for now — fix is in the retry logic itself.
+        # (e.g. a retry-click race landing two transitions in a row) AND
+        # RECOVER by clicking Prev once.
+        #
+        # Verified live 2026-04-26 on SHEIN: a slow first Next click was
+        # treated as a no-op, the retry re-clicked, and the two clicks
+        # combined advanced us from page 1 to page 3 — silently dropping
+        # page 2's 100 sellers. Result: 247 captured vs 347 actual. The
+        # detection code below logged it but didn't recover. Now we click
+        # Prev to back up, re-read the row keys, and continue normally.
         try:
             page_input = pag_row.locator("input").first
             if page_input.count() > 0:
                 reported_page_num = int(
                     (page_input.get_attribute("value") or "").strip() or "0"
                 )
-                if reported_page_num and reported_page_num != page_num:
+                if reported_page_num and reported_page_num > page_num:
+                    skip = reported_page_num - page_num
                     logging.warning(
                         f"   ↳ page-skip detected: loop is on page {page_num} "
                         f"but pagination bar reports page {reported_page_num}. "
-                        "This usually means a Next click double-advanced during "
-                        "a retry — see the fix in _click_next_and_wait."
+                        f"Clicking Prev {skip}x to recover the missed page(s)."
                     )
+                    # Click Prev `skip` times to back up to where we should be.
+                    prev_btn_loc = pag_row.locator("button").first
+                    for _ in range(skip):
+                        try:
+                            prev_btn_loc = page.locator(
+                                "div.inte-flex.inte-flex--spacing-MediumTight"
+                                ":has(.inte-Pagination--PageCount) button"
+                            ).first
+                            prev_btn_loc.click(timeout=8000)
+                            page.wait_for_timeout(800)
+                        except Exception as err:
+                            logging.warning(
+                                f"   ↳ Prev click during recovery failed: {err}"
+                            )
+                            break
+                    # Wait for the table to settle on the corrected page.
+                    try:
+                        page.wait_for_function(
+                            """(target) => {
+                                const inp = document.querySelector(
+                                    'div.inte-flex.inte-flex--spacing-MediumTight'
+                                    + ':has(.inte-Pagination--PageCount) input'
+                                );
+                                if (!inp) return false;
+                                return parseInt(inp.value || '0', 10) === target;
+                            }""",
+                            arg=page_num,
+                            timeout=10000,
+                        )
+                        logging.info(
+                            f"   ↳ recovered to page {page_num} after page-skip"
+                        )
+                        # Re-read rows now that we're on the correct page.
+                        rows = page.locator("tr.ant-table-row")
+                    except PwTimeout:
+                        logging.warning(
+                            f"   ↳ couldn't confirm recovery to page {page_num} "
+                            f"within 10s; continuing with whatever's visible."
+                        )
         except Exception:
             pass
 
@@ -2982,69 +3028,111 @@ def main():
             )
             all_reports.append(uninstall_report)
 
-    promote = all(r.is_promotable for r in all_reports) if all_reports else False
     blocked = [r for r in all_reports if r.status == "blocked"]
     pending = [r for r in all_reports if r.status == "pending_review"]
 
+    # Per-app promotion: an app is "blocked" if EITHER its sellers OR
+    # uninstalls report flagged blocked. Apps with clean reports get
+    # promoted to latest/ even when other apps fail. Without this an
+    # all-or-nothing block would drop the entire run into staging/ —
+    # verified live 2026-04-26: scrape captured TEMU EU (73 sellers)
+    # cleanly but a TEMU US validator block sent everything to staging,
+    # so TEMU EU never reached the dashboard.
+    blocked_app_ids: set[str] = {r.app_name for r in blocked}
+
     if blocked:
         logging.warning(
-            f"🛑 Validation BLOCKED this run ({len(blocked)} report(s) "
-            f"flagged). Previous latest/ snapshot preserved."
+            f"🛑 Validator blocked {len(blocked_app_ids)} app(s): "
+            f"{sorted(blocked_app_ids)}. Their prior latest/ snapshot "
+            f"is preserved via merge logic. Other apps' fresh data "
+            f"DOES land in latest/."
         )
         for r in blocked:
             logging.warning(f"   ↳ {r.app_name} / {r.kind}: blocked")
-    elif pending:
+    if pending:
         logging.warning(
             f"⚠️  {len(pending)} validator report(s) flagged pending_review. "
             f"Promoting anyway (soft signal only); admin UI should surface."
         )
 
+    # Filter blocked apps OUT of the latest-promotion path. Their fresh
+    # data still goes to results/staging/<stamp>/ via the writes below,
+    # so admins can audit what was captured. Merge logic in
+    # persist_results keeps their PRIOR rows visible on the dashboard.
+    sellers_to_promote = {
+        k: v for k, v in all_sellers.items() if k not in blocked_app_ids
+    }
+    uninstalls_to_promote = {
+        k: v for k, v in all_uninstalls.items() if k not in blocked_app_ids
+    }
+
     # --- Persist -----------------------------------------------------------
     if all_sellers or all_uninstalls:
         try:
             stamp = _now_stamp()
+            # Write fresh data for GOOD apps to latest/. Merge logic
+            # preserves prior data for blocked apps.
             written = persist_results(
-                all_sellers,
-                uninstalls_by_app=all_uninstalls,
+                sellers_to_promote,
+                uninstalls_by_app=uninstalls_to_promote,
                 stamp=stamp,
-                promote_latest=promote,
+                promote_latest=True,  # always promote per-app
                 is_targeted=bool(target_app),
             )
-            seller_total = sum(len(v) for v in all_sellers.values())
-            uninstall_total = sum(len(v) for v in all_uninstalls.values())
-            bucket = "latest" if promote else "staging"
-            logging.info(
-                f"💾 Persisted {seller_total} sellers + {uninstall_total} "
-                f"uninstalls across {len(all_sellers)} apps → {bucket}/"
+            promoted_total = sum(len(v) for v in sellers_to_promote.values())
+            blocked_total = sum(
+                len(v) for k, v in all_sellers.items() if k in blocked_app_ids
             )
-            for key, path in written[bucket].items():
-                logging.info(f"   ↳ {bucket}: {path}")
+            logging.info(
+                f"💾 Persisted {promoted_total} sellers across "
+                f"{len(sellers_to_promote)} promotable app(s) → latest/"
+            )
+            if blocked_app_ids:
+                logging.info(
+                    f"💾 {blocked_total} sellers across "
+                    f"{len(blocked_app_ids)} blocked app(s) → staging/ only"
+                )
+            for key, path in written.get("latest", {}).items():
+                logging.info(f"   ↳ latest: {path}")
             logging.info(f"   ↳ run snapshot: {written['json']}")
 
-            # If validation blocked: drop a markdown breadcrumb INTO latest/
-            # so anyone opening the dashboard sees *why* the numbers look
-            # stale. Also write the full validator report next to it for
-            # post-mortem. `latest/` CSVs themselves are untouched.
-            if not promote:
+            # If at least one app was blocked, also write the failed apps'
+            # data to staging/<stamp>/ for post-mortem (otherwise it'd be
+            # invisible since latest/ only got the good apps).
+            if blocked_app_ids:
+                blocked_sellers = {
+                    k: v for k, v in all_sellers.items() if k in blocked_app_ids
+                }
+                blocked_uninstalls = {
+                    k: v for k, v in all_uninstalls.items() if k in blocked_app_ids
+                }
+                if blocked_sellers or blocked_uninstalls:
+                    persist_results(
+                        blocked_sellers,
+                        uninstalls_by_app=blocked_uninstalls,
+                        stamp=stamp,
+                        promote_latest=False,  # staging only
+                        is_targeted=bool(target_app),
+                    )
+
+            # Drop a markdown breadcrumb in latest/ ONLY if every single
+            # report blocked — that means nothing fresh landed and the
+            # dashboard is pure prior data.
+            full_block = bool(blocked) and not sellers_to_promote and not uninstalls_to_promote
+            stale = LATEST_DIR / "INVALID_RUN.md"
+            if full_block:
                 LATEST_DIR.mkdir(parents=True, exist_ok=True)
                 report_md = sv.format_run_report(
-                    all_reports,
-                    promoted=False,
-                    stamp=stamp,
+                    all_reports, promoted=False, stamp=stamp,
                 )
-                (LATEST_DIR / "INVALID_RUN.md").write_text(
-                    report_md, encoding="utf-8",
-                )
+                stale.write_text(report_md, encoding="utf-8")
                 logging.warning(
-                    f"   ↳ breadcrumb written: {LATEST_DIR / 'INVALID_RUN.md'}"
+                    f"   ↳ breadcrumb written (full-run block): {stale}"
                 )
-            else:
-                # Happy path: clear any stale breadcrumb from a previous
-                # blocked run so the dashboard doesn't keep showing the
-                # warning after the issue is resolved.
-                stale = LATEST_DIR / "INVALID_RUN.md"
-                if stale.exists():
-                    stale.unlink()
+            elif stale.exists():
+                # Partial-block runs are normal now — clear the stale
+                # breadcrumb so the dashboard doesn't keep showing it.
+                stale.unlink()
         except Exception:
             logging.exception("Failed to persist results; in-memory data is intact.")
     else:
