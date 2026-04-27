@@ -1279,68 +1279,27 @@ def _scrape_paginated_ant_table(
             pass
 
         # Best-effort current-page indicator: the <input> in the pagination
-        # bar shows the active page number. We read it to detect page skips
-        # (e.g. a retry-click race landing two transitions in a row) AND
-        # RECOVER by clicking Prev once.
-        #
-        # Verified live 2026-04-26 on SHEIN: a slow first Next click was
-        # treated as a no-op, the retry re-clicked, and the two clicks
-        # combined advanced us from page 1 to page 3 — silently dropping
-        # page 2's 100 sellers. Result: 247 captured vs 347 actual. The
-        # detection code below logged it but didn't recover. Now we click
-        # Prev to back up, re-read the row keys, and continue normally.
+        # bar shows the active page number. We read it just to LOG when a
+        # page-skip happens; recovery via Prev/page-input is unreliable
+        # (verified live 2026-04-27: my Prev-click recovery left the page
+        # in a worse state, ending the loop at page 2 with only 200 rows
+        # captured vs the expected 347). The real fix is to prevent the
+        # double-click in the first place — the wait timeouts in
+        # `_click_next_and_wait` below have been bumped to handle CI's
+        # slower transitions.
         try:
             page_input = pag_row.locator("input").first
             if page_input.count() > 0:
                 reported_page_num = int(
                     (page_input.get_attribute("value") or "").strip() or "0"
                 )
-                if reported_page_num and reported_page_num > page_num:
-                    skip = reported_page_num - page_num
+                if reported_page_num and reported_page_num != page_num:
                     logging.warning(
                         f"   ↳ page-skip detected: loop is on page {page_num} "
                         f"but pagination bar reports page {reported_page_num}. "
-                        f"Clicking Prev {skip}x to recover the missed page(s)."
+                        f"Continuing with the data that landed; bump click "
+                        f"timeout in _click_next_and_wait to prevent."
                     )
-                    # Click Prev `skip` times to back up to where we should be.
-                    prev_btn_loc = pag_row.locator("button").first
-                    for _ in range(skip):
-                        try:
-                            prev_btn_loc = page.locator(
-                                "div.inte-flex.inte-flex--spacing-MediumTight"
-                                ":has(.inte-Pagination--PageCount) button"
-                            ).first
-                            prev_btn_loc.click(timeout=8000)
-                            page.wait_for_timeout(800)
-                        except Exception as err:
-                            logging.warning(
-                                f"   ↳ Prev click during recovery failed: {err}"
-                            )
-                            break
-                    # Wait for the table to settle on the corrected page.
-                    try:
-                        page.wait_for_function(
-                            """(target) => {
-                                const inp = document.querySelector(
-                                    'div.inte-flex.inte-flex--spacing-MediumTight'
-                                    + ':has(.inte-Pagination--PageCount) input'
-                                );
-                                if (!inp) return false;
-                                return parseInt(inp.value || '0', 10) === target;
-                            }""",
-                            arg=page_num,
-                            timeout=10000,
-                        )
-                        logging.info(
-                            f"   ↳ recovered to page {page_num} after page-skip"
-                        )
-                        # Re-read rows now that we're on the correct page.
-                        rows = page.locator("tr.ant-table-row")
-                    except PwTimeout:
-                        logging.warning(
-                            f"   ↳ couldn't confirm recovery to page {page_num} "
-                            f"within 10s; continuing with whatever's visible."
-                        )
         except Exception:
             pass
 
@@ -1465,10 +1424,14 @@ def _scrape_paginated_ant_table(
             except PwTimeout:
                 return False
 
-        # First attempt: click Next and wait up to 25s. Shein's seller
-        # endpoint has been observed taking ~11-12s/page on a good run but
-        # occasionally >25s on a slow one. 25s covers the common slow case.
-        refreshed = _click_next_and_wait(prev_first_key, timeout_ms=60000)
+        # First attempt: click Next and wait up to 150s. SHEIN's first
+        # Next click in CI was observed taking ~85s to land 2026-04-26
+        # — anything below that risks a double-click race (re-click
+        # lands AFTER the original click finally takes effect, jumping
+        # us forward 2 pages and silently dropping 100 rows). 150s
+        # gives generous headroom; the wait_for_function returns
+        # immediately on transition so good runs don't pay this cost.
+        refreshed = _click_next_and_wait(prev_first_key, timeout_ms=150000)
         was_retry = False
 
         # If the table didn't refresh, the most common causes are:
