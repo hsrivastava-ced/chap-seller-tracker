@@ -391,30 +391,67 @@ def _render_scrape_health_banner() -> None:
         )
         return
 
-    bullet_items = []
-    for app_id in stale_apps:
-        bullet_items.append(
-            f'<li><b>{app_id}</b> — last successful scrape data preserved on dashboard, '
-            f'but <span style="color:#dc2626;">most recent scheduled run did NOT capture this app</span> '
-            f'(login failure, cHAP outage, or pagination issue). Check the Runs tab.</li>'
-        )
-    for app_id in empty_apps:
-        bullet_items.append(
-            f'<li><b>{app_id}</b> — latest snapshot shows 0 rows. cHAP may have nothing to scrape, '
-            f'OR the scraper hit an error post-login. Check the Runs tab for the run output.</li>'
-        )
-    bullets = "".join(bullet_items)
-
+    # Header banner.
+    total_problems = len(stale_apps) + len(empty_apps)
     st.markdown(
         f'<div style="padding:12px 14px; background:rgba(245,158,11,0.10); '
         f'border-left:4px solid #f59e0b; border-radius:6px; '
-        f'margin:6px 0 18px 0; font-size:0.88rem;">'
-        f'<b style="color:#b45309;">⚠ {len(stale_apps) + len(empty_apps)} app(s) need attention</b> '
+        f'margin:6px 0 14px 0; font-size:0.88rem;">'
+        f'<b style="color:#b45309;">⚠ {total_problems} app(s) need attention</b> '
         f'<span style="color:#64748b;">· latest snapshot: {latest_run_stamp}</span>'
-        f'<ul style="margin:8px 0 0 0; padding-left:24px; color:#475569;">'
-        f'{bullets}</ul></div>',
+        f'</div>',
         unsafe_allow_html=True,
     )
+
+    # Per-app row with Retry sync button. Combines stale (missing from
+    # last fresh scrape) + empty (captured but 0 rows) into one list.
+    # Retry dispatches a TARGET_APP=<id> workflow_dispatch so only the
+    # affected panel re-runs.
+    affected: list[tuple[str, str]] = []
+    for app_id in stale_apps:
+        affected.append((
+            app_id,
+            "Most recent scheduled scrape did NOT capture this app "
+            "(login failure, cHAP outage, or pagination issue). The "
+            "dashboard still shows the last successful snapshot via "
+            "the merge logic; click Retry once the cHAP-side issue "
+            "is resolved.",
+        ))
+    for app_id in empty_apps:
+        affected.append((
+            app_id,
+            "Latest snapshot shows 0 rows. cHAP may have nothing to "
+            "scrape, OR the scraper hit an error post-login. Check the "
+            "Runs tab for the full output.",
+        ))
+
+    can_retry = (
+        st.session_state.get("_principal") is not None
+        and roles.can(st.session_state["_principal"], "add_app")
+    )
+    for app_id, reason in affected:
+        col_msg, col_btn = st.columns([5, 1])
+        with col_msg:
+            st.markdown(
+                f'<div style="padding:9px 14px; background:#fff; '
+                f'border:1px solid #fde68a; border-left:3px solid #f59e0b; '
+                f'border-radius:8px; margin-bottom:8px;">'
+                f'<div style="font-weight:600; color:#0f172a; font-size:0.92rem;">'
+                f'{app_id}</div>'
+                f'<div style="color:#475569; font-size:0.82rem; margin-top:3px; '
+                f'line-height:1.45;">{reason}</div></div>',
+                unsafe_allow_html=True,
+            )
+        with col_btn:
+            if can_retry:
+                if st.button(
+                    "🔁 Retry sync",
+                    key=f"retry_health_{app_id}",
+                    use_container_width=True,
+                ):
+                    _retry_sync_for_app(
+                        st.session_state["_principal"], app_id,
+                    )
 
 
 def _render_overview_tab(principal: roles.UserPrincipal):
