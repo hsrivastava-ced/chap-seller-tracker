@@ -186,6 +186,117 @@ def main():
 # =================================================================
 # Overview tab — the apps table + Run scrape now
 # =================================================================
+def _render_app_error_cards(
+    principal: roles.UserPrincipal,
+    apps: list[AppEntry],
+) -> None:
+    """Surface per-app login/scrape failures and let the panel owner
+    retry once the cHAP-side issue is fixed.
+
+    The flow this supports: an admin onboards a new panel via "Add new
+    app" → workflow_dispatch fires a TARGET_APP scrape → scrape fails
+    (e.g. cHAP renders an OTP screen) → run.json records the error
+    reason → THIS UI shows the reason on the Overview tab → admin asks
+    their dev to disable OTP → admin clicks "Retry sync" → workflow
+    dispatched again with TARGET_APP → on success the error clears
+    automatically.
+    """
+    import json as _json
+    from pathlib import Path as _Path
+
+    latest_path = _Path("results/latest/run.json")
+    if not latest_path.exists():
+        return
+    try:
+        latest = _json.loads(latest_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    errors = (latest.get("app_errors") or {})
+    if not errors:
+        return
+
+    # Banner header.
+    st.markdown(
+        f'<div style="margin:6px 0 10px 0; padding:10px 14px; '
+        f'background:rgba(239,68,68,0.08); border-left:4px solid '
+        f'#ef4444; border-radius:6px;">'
+        f'<b style="color:#dc2626;">⚠ {len(errors)} admin panel'
+        f'{"s" if len(errors) != 1 else ""} need'
+        f'{"" if len(errors) != 1 else "s"} attention</b><br>'
+        f'<span style="color:#64748b; font-size:0.85rem;">'
+        f'These panels failed their last scrape. Read the cause, fix '
+        f'the cHAP-side issue (often OTP, captcha, or stale credentials), '
+        f'then click Retry sync.</span></div>',
+        unsafe_allow_html=True,
+    )
+
+    apps_by_id = {a.id: a for a in apps}
+    can_retry = roles.can(principal, "add_app")
+    for app_id, reason in errors.items():
+        app = apps_by_id.get(app_id)
+        label = app.label if app else app_id
+        # Compact per-app card: name, reason, Retry button.
+        col_msg, col_btn = st.columns([5, 1])
+        with col_msg:
+            st.markdown(
+                f'<div style="padding:10px 14px; background:#fff; '
+                f'border:1px solid #fecaca; border-left:3px solid #ef4444; '
+                f'border-radius:8px; margin-bottom:8px;">'
+                f'<div style="font-weight:600; color:#0f172a;">'
+                f'{label} <span style="color:#94a3b8; font-weight:400;">'
+                f'· {app_id}</span></div>'
+                f'<div style="color:#dc2626; font-size:0.85rem; margin-top:3px;">'
+                f'{reason}</div></div>',
+                unsafe_allow_html=True,
+            )
+        with col_btn:
+            if can_retry:
+                if st.button("🔁 Retry sync", key=f"retry_{app_id}", use_container_width=True):
+                    _retry_sync_for_app(principal, app_id)
+
+
+def _retry_sync_for_app(principal: roles.UserPrincipal, app_id: str) -> None:
+    """Dispatch a TARGET_APP scrape so the failed panel is retried in
+    isolation. The scheduler will pick the run up; on success the error
+    in latest/run.json's app_errors map clears automatically and this
+    card disappears on the next dashboard reload."""
+    if not roles.can(principal, "add_app"):
+        show_warning(
+            "You don't have permission to start a scrape.",
+            hint="Ask a super admin to grant you the **editor** role.",
+        )
+        return
+    try:
+        ctx = gh.context_from_streamlit(st)
+    except Exception as e:
+        show_warning(
+            "Couldn't reach GitHub to trigger the retry.",
+            hint="Streamlit secrets need a `[github]` block with `pat`.",
+            cause=e,
+        )
+        return
+    try:
+        gh.trigger_scrape(
+            ctx,
+            reason=f"retry sync for {app_id} by {principal.email}",
+            target_app=app_id,
+        )
+        st.success(
+            f"✓ Retry dispatched for **{app_id}**. The scrape runs on "
+            "GitHub Actions in ~3–5 min. Refresh this page after that — "
+            "if the error clears, the data lands on the dashboard "
+            "automatically and the panel owner gets visibility on the "
+            "Customer Intelligence page."
+        )
+    except Exception as e:
+        show_warning(
+            "Couldn't dispatch the retry.",
+            hint="The PAT needs Actions:write on the repo.",
+            cause=e,
+        )
+
+
 def _render_scrape_health_banner() -> None:
     """Detect partial-failure scrapes and warn the admin.
 
@@ -336,6 +447,13 @@ def _render_overview_tab(principal: roles.UserPrincipal):
             "up the first one."
         )
         return
+
+    # Per-app error cards + Retry-sync buttons. Reads app_errors from
+    # results/latest/run.json — populated by scraper.py whenever a per-
+    # app login or scrape raises. Lets the panel owner see the cause
+    # ("Login not accepted: One-time Passcode sent successfully!") and
+    # click Retry once their dev fixes the cHAP-side issue.
+    _render_app_error_cards(principal, apps)
 
     # Status emoji — st.dataframe renders cells as plain text, so no
     # `:green[...]` Streamlit tags. Creds column deliberately omitted

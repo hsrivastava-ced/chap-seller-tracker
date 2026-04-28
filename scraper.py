@@ -2617,6 +2617,7 @@ def persist_results(
     promote_latest: bool = True,
     *,
     is_targeted: bool = False,
+    app_errors: dict[str, str] | None = None,
 ) -> dict:
     """
     Write per-app seller + uninstall CSVs (latest + history) and a combined
@@ -2707,6 +2708,15 @@ def persist_results(
     # last successfully scraped before being deregistered.
     sellers_for_latest = dict(sellers_by_app)
     uninstalls_for_latest = dict(uninstalls_by_app)
+    # Start with this run's app errors; merge in prior errors below for
+    # apps that weren't scraped THIS run. Apps that WERE scraped this run
+    # have their error refreshed (cleared on success, set on failure).
+    errors_for_latest: dict[str, str] = dict(app_errors or {})
+    apps_scraped_this_run: set[str] = (
+        set((sellers_by_app or {}).keys())
+        | set((uninstalls_by_app or {}).keys())
+        | set((app_errors or {}).keys())
+    )
     if promote_latest:
         try:
             import app_registry as _ar
@@ -2719,6 +2729,7 @@ def persist_results(
                 prior = json.loads(prior_path.read_text(encoding="utf-8"))
                 prior_sellers = prior.get("data") or {}
                 prior_uninstalls = prior.get("uninstalls") or {}
+                prior_errors = prior.get("app_errors") or {}
                 for name, rows in prior_sellers.items():
                     if active_ids and name not in active_ids:
                         continue  # app was removed from apps.yaml
@@ -2734,6 +2745,15 @@ def persist_results(
                         continue
                     if name not in uninstalls_for_latest:
                         uninstalls_for_latest[name] = rows
+                # Errors: keep prior error for apps that weren't touched
+                # this run. Apps that WERE scraped this run get a fresh
+                # state (cleared on success, set in app_errors on failure).
+                for name, msg in prior_errors.items():
+                    if active_ids and name not in active_ids:
+                        continue
+                    if name in apps_scraped_this_run:
+                        continue  # this run resolved it (success or new error)
+                    errors_for_latest[name] = msg
             except Exception as err:
                 logging.warning(
                     f"   ↳ merge: couldn't read previous latest/run.json "
@@ -2752,6 +2772,10 @@ def persist_results(
         "uninstall_total": sum(len(rows) for rows in uninstalls_by_app.values()),
         "data": sellers_by_app,
         "uninstalls": uninstalls_by_app,
+        # Per-app failure reasons — read by Admin UI to surface "Login
+        # blocked by OTP" / similar messages alongside the configured-
+        # apps table, with a Retry sync button.
+        "app_errors": dict(app_errors or {}),
     }
     # Latest snapshot includes merged-forward data from apps not scraped
     # this run (failed login, skipped, etc.).
@@ -2771,6 +2795,7 @@ def persist_results(
         )
         run_json_latest["data"] = sellers_for_latest
         run_json_latest["uninstalls"] = uninstalls_for_latest
+        run_json_latest["app_errors"] = errors_for_latest
 
     json_path = history_run_dir / "run.json"
     json_path.write_text(
@@ -2814,6 +2839,11 @@ def main():
     # paginator's trace_sink; `observed_labels` holds what Customize Grid
     # showed us.
     seller_traces: dict[str, list] = {}
+    # Per-app error reasons — populated when login or scrape raises so
+    # the Admin UI can surface a one-line cause to the panel owner
+    # (e.g. "Login not accepted: One-time Passcode sent successfully!"
+    # → owner asks dev to disable OTP, then hits Retry sync).
+    app_errors: dict[str, str] = {}
     uninstall_traces: dict[str, list] = {}
     observed_labels_by_app: dict[str, list] = {}
 
@@ -2936,8 +2966,20 @@ def main():
                         f"Uninstalls scrape failed for {app_name}; "
                         "sellers already captured. Continuing."
                     )
-            except Exception:
-                logging.exception(f"Aborting {app_name}; moving on.")
+            except Exception as app_err:
+                # Capture the failure reason so the Admin UI can surface it
+                # ("Login not accepted: One-time Passcode sent successfully!"
+                # is the kind of message a panel owner needs to see — they
+                # can ask their dev to disable the OTP, then click 'Retry
+                # sync' once the cHAP-side issue is fixed). Without this
+                # the dashboard shows the app as "missing" with no signal
+                # for why or what to do next.
+                err_msg = str(app_err) or app_err.__class__.__name__
+                # Strip noisy Playwright stack-trace bits but keep the
+                # actionable bit (toast text from cHAP).
+                err_msg = err_msg.split("\n")[0][:280]
+                app_errors[app_name] = err_msg
+                logging.exception(f"Aborting {app_name}; moving on. ({err_msg})")
             finally:
                 page.close()
                 context.close()
@@ -3041,6 +3083,7 @@ def main():
                 stamp=stamp,
                 promote_latest=True,  # always promote per-app
                 is_targeted=bool(target_app),
+                app_errors=app_errors,
             )
             promoted_total = sum(len(v) for v in sellers_to_promote.values())
             blocked_total = sum(
@@ -3076,6 +3119,7 @@ def main():
                         stamp=stamp,
                         promote_latest=False,  # staging only
                         is_targeted=bool(target_app),
+                        app_errors=app_errors,
                     )
 
             # Drop a markdown breadcrumb in latest/ ONLY if every single
