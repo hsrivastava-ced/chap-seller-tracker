@@ -3142,6 +3142,39 @@ def main():
                 stale.unlink()
         except Exception:
             logging.exception("Failed to persist results; in-memory data is intact.")
+    elif app_errors:
+        # Every app failed (typically a targeted retry where the target
+        # itself failed login) — no fresh data to persist, but we still
+        # need to record WHY in latest/run.json so the Admin UI can show
+        # the cause + Retry button. Just merge the new errors into the
+        # existing run.json without touching `data` or `uninstalls`.
+        try:
+            prior_path = LATEST_DIR / "run.json"
+            if prior_path.exists():
+                prior = json.loads(prior_path.read_text(encoding="utf-8"))
+            else:
+                prior = {
+                    "run_stamp": _now_stamp(),
+                    "data": {}, "uninstalls": {}, "app_errors": {},
+                }
+            existing_errors = prior.get("app_errors") or {}
+            existing_errors.update(app_errors)
+            prior["app_errors"] = existing_errors
+            LATEST_DIR.mkdir(parents=True, exist_ok=True)
+            prior_path.write_text(
+                json.dumps(prior, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
+            logging.info(
+                f"💾 Recorded login/scrape errors for "
+                f"{sorted(app_errors.keys())} into latest/run.json's "
+                f"app_errors map (no fresh data was captured)."
+            )
+        except Exception:
+            logging.exception(
+                "Failed to record app_errors into run.json; "
+                "in-memory data is intact."
+            )
     else:
         logging.warning("No results to persist — every app failed to scrape.")
 
