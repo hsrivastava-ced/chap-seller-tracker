@@ -88,28 +88,104 @@ def display_name(app_key: str) -> str:
 
 
 # Test stores we should NEVER include in stakeholder numbers. These are
-# internal QA sellers, typically created via a corporate email. Counting
-# them inflates install / churn metrics and confuses the numbers users
-# see in their own admin panel.
+# internal QA sellers, typically created via a corporate email or via
+# clearly-test-named subdomains. Counting them inflates install/churn
+# metrics and confuses the numbers users see in their own admin panel.
 TEST_EMAIL_DOMAINS: tuple[str, ...] = (
     "threecolts.com",
     "cedcommerce.com",
 )
 
+# Specific personal emails that map to internal QA users. Lives outside
+# the domain list because these are gmail / outlook accounts. Add new
+# entries as you discover them — case-insensitive.
+TEST_EMAIL_EXACT: frozenset[str] = frozenset({
+    "syedubaidhussain11@gmail.com",  # Syed Ubaid (internal QA)
+})
+
+# Tokens that, when present as a segment OR as a suffix of a segment in
+# a Shopify-style subdomain (e.g. "alfaparf-staging.myshopify.com" or
+# "sheindemo.myshopify.com"), mark the store as internal. We don't
+# match PREFIXES (would false-positive on real words like
+# "development", "developer") — only segment-equality and suffix.
+_TEST_URL_TOKENS: tuple[str, ...] = (
+    "test", "demo", "dev", "staging", "sandbox",
+)
+
+
+def _looks_like_test_subdomain(host_part: str) -> bool:
+    """Detect test/demo/dev patterns in a Shopify-style subdomain.
+
+    Examples (returns True):
+      sheindemo.myshopify.com   — `sheindemo` ends with `demo`
+      sleekedev.myshopify.com   — `sleekedev` ends with `dev`
+      zona-test.myshopify.com   — segment `test` matches
+      alfaparf-staging.myshopify.com — segment `staging` matches
+
+    Examples (returns False — avoid false positives on real words):
+      development.com  — `development` doesn't end with any test token
+      demography.com   — same
+      qatar.com        — `qatar` doesn't end with `qa`
+    """
+    import re as _re
+    if not host_part:
+        return False
+    for segment in _re.split(r"[-_.]+", host_part.lower()):
+        if not segment:
+            continue
+        if segment in _TEST_URL_TOKENS:
+            return True
+        for token in _TEST_URL_TOKENS:
+            if len(segment) > len(token) and segment.endswith(token):
+                return True
+    return False
+
 
 def _is_test_store(row: dict) -> bool:
     """Return True if the seller/uninstall row belongs to an internal
-    test store. Checks the email's domain (case-insensitive). Missing
-    or malformed emails → False (we can't prove it's a test, so we keep
-    it)."""
-    email = row.get("email")
-    if not isinstance(email, str):
-        return False
-    e = email.strip().lower()
-    if "@" not in e:
-        return False
-    domain = e.rsplit("@", 1)[-1]
-    return any(domain == d or domain.endswith("." + d) for d in TEST_EMAIL_DOMAINS)
+    test store. Three independent signals (any one triggers exclusion):
+
+      1. Email is in the explicit `TEST_EMAIL_EXACT` allowlist
+         (personal emails that map to internal QA — currently just
+         Syed Ubaid's gmail).
+      2. Email domain is one of `TEST_EMAIL_DOMAINS` (threecolts.com,
+         cedcommerce.com).
+      3. Store URL or username has a test/dev/demo/staging/sandbox
+         token in its Shopify subdomain (sheindemo, sleekedev,
+         alfaparf-staging, zona-test, etc.).
+
+    Missing fields → False (we'd rather miss a test store than
+    accidentally drop a real one).
+    """
+    import re as _re
+    # 1 + 2: email-based
+    email = (row.get("email") or "")
+    if isinstance(email, str):
+        e = email.strip().lower()
+        if e and "@" in e:
+            if e in TEST_EMAIL_EXACT:
+                return True
+            domain = e.rsplit("@", 1)[-1]
+            if any(domain == d or domain.endswith("." + d) for d in TEST_EMAIL_DOMAINS):
+                return True
+
+    # 3: subdomain heuristic on store_url + username
+    for field in ("store_url", "username"):
+        v = (row.get(field) or "")
+        if not isinstance(v, str):
+            continue
+        v = v.strip().lower()
+        if not v:
+            continue
+        # Normalise: strip protocol, www., path, and `.myshopify.com`
+        # suffix so we focus on the identifier.
+        v = _re.sub(r"^https?://", "", v)
+        v = _re.sub(r"^www\.", "", v)
+        v = v.split("/", 1)[0]
+        v = _re.sub(r"\.myshopify\.com$", "", v)
+        if _looks_like_test_subdomain(v):
+            return True
+    return False
 
 
 def exclude_test_stores(

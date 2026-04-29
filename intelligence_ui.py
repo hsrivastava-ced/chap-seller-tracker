@@ -1096,10 +1096,31 @@ def _render_seven_day_movement(
         s for s in sellers
         if (d := _parse_seller_date(s.get("installed_on"))) and d >= cutoff
     ]
-    recent_uninstalls = [
+    # Each seller appears once per platform in cHAP's uninstalls list
+    # (Shopify uninstall + SHEIN uninstall = 2 rows, same seller_id).
+    # Dedup by seller_id and keep the EARLIEST uninstalled_on per
+    # seller — that's when they first started uninstalling. The shops_raw
+    # field already preserves both per-platform timestamps for display.
+    _recent_raw = [
         u for u in uninstalls
         if (d := _parse_seller_date(u.get("uninstalled_on"))) and d >= cutoff
     ]
+    by_sid: dict[str, dict] = {}
+    for u in _recent_raw:
+        sid = u.get("seller_id") or ""
+        if not sid:
+            # No seller_id — fall back to email + store_url as a key.
+            sid = f"{u.get('email','')}|{u.get('username','')}"
+        existing = by_sid.get(sid)
+        if existing is None:
+            by_sid[sid] = u
+            continue
+        # Keep the earliest timestamp (first uninstall action).
+        d_existing = _parse_seller_date(existing.get("uninstalled_on"))
+        d_new = _parse_seller_date(u.get("uninstalled_on"))
+        if d_new and (not d_existing or d_new < d_existing):
+            by_sid[sid] = u
+    recent_uninstalls = list(by_sid.values())
 
     # Build install-time stats index from the active sellers list — by
     # email + by normalised store URL — so each uninstall card can
