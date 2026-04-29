@@ -28,6 +28,7 @@ import customer_intelligence as ci
 import seller_delta
 import seller_delta_source
 import seller_profile_enricher as spe
+from analytics_advanced import _is_test_store
 from analytics_advanced import (
     DISPLAY_NAMES,
     display_name,
@@ -1308,6 +1309,16 @@ def _render_delta_feed(*, app_key: str) -> None:
             prior_stamp, latest_stamp = p_stamp, l_stamp
             prior_rows, latest_rows = p_rows, l_rows
 
+    # Strip internal/test stores from BOTH snapshots before computing
+    # any rail. Without this the `🌱 New install` and `🔄 Reinstall`
+    # rails surface internal QA accounts (syedubaidhussain11@gmail.com,
+    # @threecolts.com aliases, etc.) that the user has explicitly asked
+    # to be hidden. The seller-list page already filters via
+    # `exclude_test_stores` upstream — same rule must apply here so the
+    # delta feed stays consistent with the Hot/Warm/Cool counts.
+    prior_rows = [s for s in (prior_rows or []) if not _is_test_store(s)]
+    latest_rows = [s for s in (latest_rows or []) if not _is_test_store(s)]
+
     # Same multi-source chain for the uninstalls list — different key
     # in run.json. We need this list for two things:
     #  1. Surface "new uninstalls since prior scrape" — highest-value
@@ -1326,6 +1337,11 @@ def _render_delta_feed(*, app_key: str) -> None:
                 ROOT, app_name=app_key,
             )
         )
+        # Strip internal/test stores from the uninstalls list too — same
+        # rule as the seller list above. Otherwise the new-uninstalls
+        # rail surfaces threecolts test accounts the rep can't action.
+        latest_uninst = [u for u in (latest_uninst or []) if not _is_test_store(u)]
+        prior_uninst = [u for u in (prior_uninst or []) if not _is_test_store(u)]
         if latest_uninst:
             prior_ids = {u.get("seller_id") for u in (prior_uninst or [])}
             seen: set = set()
