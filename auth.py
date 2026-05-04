@@ -18,11 +18,27 @@ Streamlit native vs library fallback:
 Setup (done ONCE in Streamlit Cloud → app → Settings → Secrets):
 
     [auth]
-    redirect_uri      = "https://dashboard.threecolts.com/oauth2callback"
-    cookie_secret     = "<64 random bytes, base64>"
-    client_id         = "<from Google Cloud console>"
-    client_secret     = "<from Google Cloud console>"
+    redirect_uri  = "https://chap-seller-tracker.streamlit.app/oauth2callback"
+    cookie_secret = "<32+ random bytes — generate with `python -c 'import secrets; print(secrets.token_urlsafe(48))'`>"
+
+    [auth.google]
+    client_id           = "<from Google Cloud console>"
+    client_secret       = "<from Google Cloud console>"
     server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
+
+    NOTE: the provider must live in a nested `[auth.google]` table because
+    `gate()` calls `st.login("google")` (named provider). A flat `[auth]`
+    block with client_id/secret at the top level only works when calling
+    `st.login()` with no args, which we don't.
+
+    NOTE: `cookie_secret` MUST be set explicitly. If it's missing, Streamlit
+    generates a random one per process — and on Streamlit Cloud the app
+    reboots between Sign-in click and OAuth callback, which makes the state
+    cookie unverifiable and produces `MismatchingStateError` (CSRF Warning).
+
+    NOTE: the redirect_uri value here MUST exactly match the one registered
+    in Google Cloud Console → APIs & Services → Credentials → OAuth client
+    → Authorized redirect URIs. No trailing slash, no `~/+/` prefix.
 
 Local dev (without real Google creds):
     Set AUTH_DEV_EMAIL=hsrivastava@threecolts.com in .env before running
