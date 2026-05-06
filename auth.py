@@ -137,18 +137,21 @@ def sign_out_button(st=None, *, skip_caption: bool = False):
 # Internals
 # --------------------------------------------------------------------
 def _resolve_email(st) -> Optional[str]:
-    """Try, in order: native st.experimental_user → streamlit-oauth → local-dev env."""
-    # 1. Native Streamlit auth (1.42+)
-    email = _resolve_email_native(st)
-    if email:
-        return email
+    """Resolve via streamlit-oauth (library) → local-dev env.
 
-    # 2. Library fallback (streamlit-oauth + Google OIDC)
+    We deliberately skip Streamlit's native st.login("google"). On
+    Streamlit Cloud 1.57 + authlib ≥1.6 the native callback at
+    /~/+/oauth2callback raises MismatchingStateError on every sign-in
+    (CSRF cookie not validated against the URL state). The library
+    path uses streamlit-oauth, which keeps state in the URL/window
+    and avoids the broken cookie handshake.
+    """
+    # 1. Library OAuth (streamlit-oauth + Google OIDC)
     email = _resolve_email_library(st)
     if email:
         return email
 
-    # 3. Local dev escape hatch (explicit env var, only if no [auth] secrets)
+    # 2. Local dev escape hatch (explicit env var, only if no [auth] secrets)
     if _is_local_dev(st):
         dev = os.getenv("AUTH_DEV_EMAIL", "").strip()
         if dev:
@@ -238,11 +241,31 @@ def _resolve_email_library(st) -> Optional[str]:
 
 
 def _auth_config(st) -> Optional[dict]:
-    """Return the [auth] secrets block or None if not configured."""
+    """Return a flattened auth config dict or None if not configured.
+
+    Streamlit's native auth wants the provider in a nested table
+    ([auth.google]) while streamlit-oauth wants the client info flat.
+    We accept both shapes in secrets.toml and flatten here so callers
+    don't care:
+
+        [auth]                              [auth]
+        client_id = "..."                   redirect_uri = "..."
+        client_secret = "..."               cookie_secret = "..."
+        redirect_uri = "..."        OR
+                                            [auth.google]
+                                            client_id = "..."
+                                            client_secret = "..."
+    """
     try:
-        cfg = dict(st.secrets.get("auth", {}))
+        auth = dict(st.secrets.get("auth", {}))
     except Exception:
         return None
+    google = {}
+    try:
+        google = dict(auth.get("google", {}) or {})
+    except Exception:
+        google = {}
+    cfg = {**auth, **google}  # google sub-table wins for client_id/secret
     needed = {"client_id", "client_secret", "redirect_uri"}
     if not needed.issubset(cfg.keys()):
         return None
@@ -276,24 +299,18 @@ def _render_login_prompt(st) -> None:
         Sign in with your **@threecolts.com** Google account to continue.
         """
     )
-    # Native path: Streamlit 1.42+ exposes st.login
-    login = getattr(st, "login", None)
-    if callable(login):
-        if st.button("Sign in with Google", type="primary", use_container_width=True):
-            login("google")
-        st.caption(
-            "Only @threecolts.com identities are permitted. "
-            "If you need access, ask the admin (Hrithik)."
-        )
-        return
-
-    # Library fallback: attempt to call _resolve_email_library once —
-    # it renders its own button.
+    # streamlit-oauth library path: it renders its own button (popup-based).
+    # We render the button by invoking _resolve_email_library — if the user
+    # has just completed OAuth in the popup, it returns the email and we
+    # rerun so gate() picks it up.
     email = _resolve_email_library(st)
     if email:
-        # Edge case: library path returned an email on this render.
         st.session_state["_pending_email"] = email
         st.rerun()
+    st.caption(
+        "Only @threecolts.com identities are permitted. "
+        "If you need access, ask the admin (Hrithik)."
+    )
 
     # Local-dev path hint
     if _is_local_dev(st) and not os.getenv("AUTH_DEV_EMAIL"):
