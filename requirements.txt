@@ -21,7 +21,14 @@ streamlit>=1.42.0,<2.0.0
 # Authlib is NOT a transitive dep of streamlit — st.login() raises
 # StreamlitAuthError at runtime when it's missing. Must be pinned here
 # so the Streamlit Cloud build installs it alongside streamlit itself.
-Authlib>=1.3.2,<2.0.0
+#
+# Pinned to <1.7 because authlib 1.7.0 tightened OAuth state validation
+# in a way that breaks Streamlit ≤1.57's internal callback handler at
+# starlette_auth_routes._auth_callback → authorize_access_token →
+# _format_state_params, raising MismatchingStateError on every sign-in
+# even with a valid cookie_secret. Re-evaluate when Streamlit ships an
+# auth handler compatible with authlib 1.7+.
+Authlib>=1.3.2,<1.7
 plotly>=5.20.0,<7.0.0
 
 # Multi-app + RBAC (Apr 2026).
