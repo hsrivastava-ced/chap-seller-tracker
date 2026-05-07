@@ -120,6 +120,64 @@ def _tier_counter_card(label: str, count: int, color: str, emoji: str) -> str:
     )
 
 
+def _render_upsell_candidates(sellers: list[dict], *, app_label: str) -> None:
+    """Top N Free-tier sellers ranked by upsell potential.
+
+    Free sellers are tracked-but-not-revenue. The signal that one is
+    ready for a paid plan is order activity + catalog size — sellers
+    pushing real volume on Free are the ones a sales rep should call
+    today. Score is `order_count + min(product_count, 1000)` so a
+    seller with 50 orders + 200 products doesn't get drowned out by
+    one with 0 orders + 22,000 products.
+
+    Hidden when there are zero Free sellers in the current view.
+    """
+    from analytics_advanced import classify_paid
+
+    free_rows = []
+    for r in sellers or []:
+        if classify_paid(r.get("plan")) != "Free":
+            continue
+        try:
+            orders = int(str(r.get("order_count") or "0").strip() or 0)
+        except Exception:
+            orders = 0
+        try:
+            products = int(str(r.get("product_count") or "0").strip() or 0)
+        except Exception:
+            products = 0
+        score = orders + min(products, 1000)
+        free_rows.append({
+            "_score": score,
+            "Email": r.get("email") or "—",
+            "Store": r.get("store_url") or "—",
+            "Plan": r.get("plan") or "—",
+            "Orders": orders,
+            "Products": products,
+            "Installed": r.get("installed_on") or "—",
+        })
+
+    if not free_rows:
+        return
+
+    free_rows.sort(key=lambda x: (-x["_score"], -x["Orders"], -x["Products"]))
+    top = free_rows[:20]
+    for row in top:
+        row.pop("_score", None)
+
+    st.markdown(
+        f"#### 💎 Free → Paid upsell candidates · {app_label}"
+    )
+    st.caption(
+        f"Top {len(top)} of {len(free_rows)} free-tier sellers ranked by "
+        f"order volume + catalog size. These are the active free users "
+        f"worth a sales nudge — they're already getting value, plan "
+        f"upgrade is the natural next step."
+    )
+    st.dataframe(top, hide_index=True, use_container_width=True)
+    st.write("")
+
+
 def _download_csv(
     df: pd.DataFrame, filename: str, *, principal=None,
 ) -> None:
@@ -348,6 +406,8 @@ def main() -> None:
         unsafe_allow_html=True,
     )
     st.write("")  # spacing before the buckets
+
+    _render_upsell_candidates(sellers, app_label=display_name(app_key))
 
     buckets = ci.buckets_for(sellers, today=today)
 

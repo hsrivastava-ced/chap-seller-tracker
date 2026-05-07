@@ -3192,7 +3192,21 @@ def main():
                         )
                         continue
 
-                    seller_trace.extend(pass_trace)
+                    # Pagination validation runs PER seller_trace. Each
+                    # framework pass paginates independently (its own
+                    # pages 1..N), so combining traces from multiple
+                    # passes produces a [1, 1, ...] sequence that the
+                    # pagination invariant treats as a loop and BLOCKS
+                    # the app — verified live 2026-05-08 on
+                    # shopify_temu_eu where pass 1 (shopify, 41 rows
+                    # in 1 page) + pass 2 (prestashop, 29 rows in 1
+                    # page) merged to [page 1, page 1] and the 28
+                    # paid-seller plans never landed in latest/.
+                    # Keep only the FIRST non-empty pass's trace —
+                    # pagination correctness is per-pass, validating
+                    # one pass is sufficient.
+                    if not seller_trace and pass_trace:
+                        seller_trace = list(pass_trace)
                     logging.info(
                         f"   ↳ framework='{fw or '(default)'}' "
                         f"captured {len(pass_rows)} rows for {app_name}"

@@ -1156,6 +1156,7 @@ def _kpi_row(
         mom_color = PALETTE["text_soft"]
 
     paid_count = paid["by_app"].get(app_key, {}).get("Paid", 0)
+    free_count = paid["by_app"].get(app_key, {}).get("Free", 0)
     notpaid_count = paid["by_app"].get(app_key, {}).get("Not Paid", 0)
 
     # Color-legend strip so every card's color is interpretable at a glance.
@@ -1242,37 +1243,58 @@ def _kpi_row(
     )
 
     st.write("")  # small gap
-    row2 = st.columns(4)
+    # Five KPI cards: Paid / Free / Not Paid / Active / Zero-order.
+    # Free is split out from the binary Paid-vs-NotPaid because it
+    # represents tracked-but-not-revenue sellers and is the primary
+    # upsell pipeline (see Customer Intelligence → Upsell candidates).
+    row2 = st.columns(5)
     row2[0].markdown(
         _kpi_card(
             "💳 Paid Sellers",
             f"{paid_count:,}",
-            sublabel="On a real plan",
+            sublabel="On a paid plan",
             value_color=PALETTE["success"],
             tooltip=(
-                f"Sellers whose plan field contains a named subscription "
-                f"(anything other than blank, N/A, Free, or Trial) for "
-                f"{app_label}."
+                f"Sellers whose plan field contains a named PAID subscription "
+                f"for {app_label}. Free / Trial / N/A are excluded — they "
+                f"have their own cards."
             ),
         ),
         unsafe_allow_html=True,
     )
     row2[1].markdown(
         _kpi_card(
+            "🆓 Free Sellers",
+            f"{free_count:,}",
+            sublabel="On Free / Trial — upsell pipeline",
+            value_color=PALETTE["primary"],
+            tooltip=(
+                f"Sellers explicitly on a Free or Trial tier for "
+                f"{app_label}. Tracked separately from Not Paid because "
+                f"they're in the funnel — Customer Intelligence ranks "
+                f"them by order_count + product_count to surface the "
+                f"best upsell candidates."
+            ),
+        ),
+        unsafe_allow_html=True,
+    )
+    row2[2].markdown(
+        _kpi_card(
             "🕗 Not Paid",
             f"{notpaid_count:,}",
-            sublabel="Free / no plan",
+            sublabel="No plan tracked",
             value_color=PALETTE["warning"],
             tooltip=(
-                f"Sellers whose plan field is empty, N/A, Free, or Trial — "
-                f"not yet converted to a paid subscription — for {app_label}."
+                f"Sellers whose plan field is empty or N/A for {app_label} "
+                f"— either the panel doesn't track plans for this app, or "
+                f"the seller hasn't been assigned one yet."
             ),
         ),
         unsafe_allow_html=True,
     )
     # Activity numbers
     act = stake["activity"]["by_app"].get(app_key, {})
-    row2[2].markdown(
+    row2[3].markdown(
         _kpi_card(
             "📦 Active (≥1 order)",
             f"{act.get('active_sellers', 0):,}",
@@ -1286,7 +1308,7 @@ def _kpi_row(
         ),
         unsafe_allow_html=True,
     )
-    row2[3].markdown(
+    row2[4].markdown(
         _kpi_card(
             "⚠️ Zero-order",
             f"{act.get('zero_order_sellers', 0):,}",

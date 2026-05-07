@@ -928,20 +928,25 @@ def uninstall_platform_split(
 
 
 # ---------------------------------------------------------------------
-# Paid vs Not-Paid derivation
+# Paid / Free / Not Paid derivation (3-bucket — updated 2026-05-08)
 # ---------------------------------------------------------------------
 #
-# Stakeholders don't care about the individual plan label — they want
-# the revenue-relevant question: "is this seller paying us or not?".
-# The mapping rule, confirmed by the user:
+# The original mapping was binary: any non-empty plan = Paid, else
+# Not Paid. With michael's "Free" tier visible (117 of 254 sellers),
+# Hrithik wanted Free split out: it's a tracked plan tier (not
+# missing data) but isn't revenue. So the bucket is:
 #
-#   Paid     = any non-empty plan value EXCEPT "N/A" or similar nulls
+#   Paid     = any non-empty plan EXCEPT "Free", "Trial", or N/A-likes
+#   Free     = explicit "Free", "Free Plan", "Trial" — known tiers
+#              but not paying
 #   Not Paid = empty plan, missing, or explicit "N/A" / "(not set)"
 #
-# The admin panel surfaces plan only on some apps. For apps where the
-# column isn't present at all, every seller is Not Paid by definition
-# (we can't prove they're paying). That's the correct fallback — it
-# prevents us from silently inflating paid-count on apps with no data.
+# Free sellers are the upsell pipeline — Customer Intelligence ranks
+# them by order_count + product_count to surface ones worth a sales
+# rep nudge.
+#
+# Apps with no plan column at all → every seller is Not Paid by
+# definition (we can't prove they're paying).
 
 _NOT_PAID_TOKENS: tuple[str, ...] = (
     "",
@@ -953,14 +958,25 @@ _NOT_PAID_TOKENS: tuple[str, ...] = (
     "(not set)",
 )
 
+# Plan tiers cHAP renders that are NOT revenue. Lowercase, exact-match
+# (no substring — "Free Trial Pro" would still be Paid, on purpose).
+_FREE_TOKENS: tuple[str, ...] = (
+    "free",
+    "free plan",
+    "trial",
+    "free trial",
+)
+
 
 def classify_paid(plan_value: Any) -> str:
-    """Return 'Paid' or 'Not Paid' for a single plan cell value."""
+    """Classify a plan cell into 'Paid', 'Free', or 'Not Paid'."""
     if plan_value is None:
         return "Not Paid"
     s = str(plan_value).strip().lower()
     if s in _NOT_PAID_TOKENS:
         return "Not Paid"
+    if s in _FREE_TOKENS:
+        return "Free"
     return "Paid"
 
 
@@ -969,11 +985,11 @@ def paid_breakdown(
     *,
     include_combined: bool = True,
 ) -> dict[str, Any]:
-    """Count Paid vs Not Paid sellers per app + combined.
+    """Count Paid / Free / Not Paid sellers per app + combined.
 
     Returns:
         {
-          "by_app": {app: {"Paid": n, "Not Paid": n}},
+          "by_app": {app: {"Paid": n, "Free": n, "Not Paid": n}},
           "totals": {app: total_sellers},
         }
     """
@@ -983,7 +999,11 @@ def paid_breakdown(
         c = Counter()
         for r in rows or []:
             c[classify_paid(r.get("plan"))] += 1
-        by_app[app] = {"Paid": c.get("Paid", 0), "Not Paid": c.get("Not Paid", 0)}
+        by_app[app] = {
+            "Paid": c.get("Paid", 0),
+            "Free": c.get("Free", 0),
+            "Not Paid": c.get("Not Paid", 0),
+        }
         totals[app] = len(rows or [])
 
     if include_combined:
@@ -995,6 +1015,7 @@ def paid_breakdown(
                 total += 1
         by_app[_COMBINED_LABEL] = {
             "Paid": c.get("Paid", 0),
+            "Free": c.get("Free", 0),
             "Not Paid": c.get("Not Paid", 0),
         }
         totals[_COMBINED_LABEL] = total
@@ -1080,26 +1101,28 @@ def activity_by_paid_status(
     *,
     include_combined: bool = True,
 ) -> dict[str, Any]:
-    """Counts per app of sellers that are Paid/Not Paid crossed with
-    active (≥1 order) / zero-order. Single-pass — small but gives the
-    stakeholder 4 numbers per app they can reason about quickly.
+    """Counts per app of sellers that are Paid/Free/Not Paid crossed
+    with active (≥1 order) / zero-order. Single-pass — gives the
+    stakeholder 6 numbers per app they can reason about quickly.
 
     Returns:
         {
           app: {
             "Paid":      {"active": n, "zero_order": n, "total": n,
                           "total_orders": int, "total_products": int},
+            "Free":      {...},
             "Not Paid":  {...},
             "total":     n,
           }
         }
     """
     def _process(rows: list[dict]) -> dict[str, Any]:
+        empty = lambda: {"active": 0, "zero_order": 0, "total": 0,
+                         "total_orders": 0, "total_products": 0}
         out = {
-            "Paid": {"active": 0, "zero_order": 0, "total": 0,
-                     "total_orders": 0, "total_products": 0},
-            "Not Paid": {"active": 0, "zero_order": 0, "total": 0,
-                         "total_orders": 0, "total_products": 0},
+            "Paid": empty(),
+            "Free": empty(),
+            "Not Paid": empty(),
             "total": 0,
         }
         for r in rows or []:
