@@ -1,0 +1,8 @@
+app: michael
+row_count: 254
+first_row.plan: 'Free'
+first_row.order_count: '0'
+first_row.product_count: '12'
+first_row.last_sync: ''
+first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
+first_row repr (truncated): {'seller_id': '69fb67f466396ddee706c022', 'store_url': 'www.relevantplay.com relevant-play.myshopify.com', 'username': 'www.relevantplay.com', 'email': 'david@authenticlabs.com', 'platforms': 'Shopify Michael', 'installed_on': '06/05/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '0', 'product_count': '12', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Free', 'last_sync': '', 'webhooks': 'View', 'action': ''}
