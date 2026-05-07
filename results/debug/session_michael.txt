@@ -1,0 +1,4 @@
+app: michael
+url: https://app-v2-frontend.cifapps.com/panel/69f03fcc93e4fa2d1d057179/seller
+title: common-home-admin-panel
+emails_outside_table: []
