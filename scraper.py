@@ -2751,6 +2751,31 @@ def persist_results(
 
     # --- sellers ---
     for app_name, rows in sellers_by_app.items():
+        # Diagnostic: dump the first row's full dict + plan/order/product
+        # values right at write time. michael 2026-05-08 showed
+        # `plan='Free'` in scrape-time logs but `plan=''` in the on-disk
+        # CSV — this lets us see what state rows are in at the
+        # _write_csv call itself, vs what scrape_seller_table returned.
+        try:
+            debug_dir = Path("results/debug")
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            sample = rows[0] if rows else {}
+            diag = (
+                f"app: {app_name}\n"
+                f"row_count: {len(rows)}\n"
+                f"first_row.plan: {sample.get('plan')!r}\n"
+                f"first_row.order_count: {sample.get('order_count')!r}\n"
+                f"first_row.product_count: {sample.get('product_count')!r}\n"
+                f"first_row.last_sync: {sample.get('last_sync')!r}\n"
+                f"first_row keys: {list(sample.keys())}\n"
+                f"first_row repr (truncated): {repr(sample)[:1200]}\n"
+            )
+            (debug_dir / f"persist_state_{app_name}.txt").write_text(
+                diag, encoding="utf-8"
+            )
+        except Exception as diag_err:
+            logging.debug(f"persist diagnostic skipped for {app_name}: {diag_err}")
+
         target_path = target_dir / f"{app_name}.csv"
         _write_csv(target_path, rows, CSV_COLUMNS)
         written[dest_bucket][app_name] = str(target_path)
