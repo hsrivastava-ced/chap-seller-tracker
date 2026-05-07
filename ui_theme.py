@@ -370,6 +370,99 @@ div[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {{
     border-radius: 10px;
     overflow: hidden;
 }}
+
+/* =========================================================
+   6. KPI cards — `.tc-kpi` (used by tc_kpi() helper) +
+      section headers — `.tc-section` (used by tc_section())
+   ========================================================= */
+.tc-kpi {{
+    padding: 18px 20px 16px 20px;
+    border-radius: 14px;
+    border: 1px solid {PALETTE["border"]};
+    background: {PALETTE["card"]};
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    position: relative;
+    overflow: hidden;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}}
+.tc-kpi:hover {{
+    transform: translateY(-1px);
+    box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+}}
+.tc-kpi::before {{
+    content: "";
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 4px;
+    background: var(--stripe, {PALETTE["primary"]});
+}}
+.tc-kpi-label {{
+    color: {PALETTE["text_soft"]};
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}}
+.tc-kpi-value {{
+    font-size: 1.85rem;
+    font-weight: 700;
+    line-height: 1.1;
+    margin-top: 6px;
+    font-variant-numeric: tabular-nums;
+    color: {PALETTE["text"]};
+}}
+.tc-kpi-sub {{
+    color: {PALETTE["text_soft"]};
+    font-size: 0.78rem;
+    margin-top: 4px;
+}}
+.tc-info {{
+    cursor: help;
+    color: {PALETTE["text_soft"]};
+    opacity: 0.65;
+    transition: opacity 0.15s ease;
+}}
+.tc-info:hover {{ opacity: 1; }}
+.tc-pill {{
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: white;
+    letter-spacing: 0.04em;
+}}
+.tc-section {{
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin: 18px 0 8px 0;
+    flex-wrap: wrap;
+}}
+.tc-section-title {{
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: {PALETTE["text"]};
+    border-left: 4px solid {PALETTE["primary"]};
+    padding-left: 10px;
+}}
+.tc-section-sub {{
+    font-size: 0.82rem;
+    color: {PALETTE["text_soft"]};
+}}
+.tc-freshness {{
+    background: {PALETTE["card"]};
+    color: {PALETTE["text_soft"]};
+    padding: 4px 12px;
+    border-radius: 999px;
+    font-size: 0.75rem;
+    border: 1px solid {PALETTE["border"]};
+    font-weight: 500;
+    white-space: nowrap;
+}}
 </style>
 """
 
@@ -404,6 +497,76 @@ def apply_shared_theme() -> None:
     st.markdown(
         f'<style>.main, .stApp {{ background-color: {theme["bg"]} !important; }}</style>',
         unsafe_allow_html=True,
+    )
+
+
+def tc_kpi(
+    col,
+    *,
+    label: str,
+    value: str,
+    sub: str = "",
+    color: str = "",
+    help_text: str = "",
+) -> None:
+    """Render one KPI card inside `col`.
+
+    Used by every dashboard surface so cards look identical across
+    cHAP and cedadmin. The `color` is rendered as a 4-px top stripe
+    on the card; defaults to the palette's primary indigo when not
+    supplied. `help_text` becomes a hover tooltip on a small ⓘ icon
+    next to the label.
+
+    Example:
+        cols = st.columns(4)
+        from ui_theme import tc_kpi, PALETTE
+        tc_kpi(cols[0], label="MRR", value="$12,345",
+               sub="ARR ≈ $148K", color=PALETTE["success"],
+               help_text="Monthly recurring revenue from paying sellers.")
+    """
+    stripe = color or PALETTE["primary"]
+    info_icon = (
+        f' <span class="tc-info" title="{_html_escape(help_text)}">ⓘ</span>'
+        if help_text else ""
+    )
+    sub_html = f'<div class="tc-kpi-sub">{sub}</div>' if sub else ""
+    col.markdown(
+        f'<div class="tc-kpi" style="--stripe: {stripe};">'
+        f'<div class="tc-kpi-label">{label}{info_icon}</div>'
+        f'<div class="tc-kpi-value">{value}</div>'
+        f'{sub_html}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def tc_section(title: str, sub: str = "") -> None:
+    """Section header with the project's left-bar accent + optional
+    sub-line. Drop this above charts/tables instead of `st.markdown('### …')`
+    so every page uses the same heading rhythm.
+    """
+    sub_html = f'<span class="tc-section-sub">{sub}</span>' if sub else ""
+    st.markdown(
+        f'<div class="tc-section">'
+        f'<span class="tc-section-title">{title}</span>'
+        f'{sub_html}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def tc_freshness_pill(text: str) -> str:
+    """Inline freshness pill for the page header. Returns HTML —
+    caller embeds it inside their own st.markdown title block."""
+    return f'<span class="tc-freshness">{_html_escape(text)}</span>'
+
+
+def _html_escape(s: str) -> str:
+    return (
+        s.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
     )
 
 

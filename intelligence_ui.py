@@ -104,18 +104,15 @@ def _table_from_rows(rows: list[dict]) -> pd.DataFrame:
 
 
 def _tier_counter_card(label: str, count: int, color: str, emoji: str) -> str:
-    """Compact counter card — mirrors the Hot/Warm/Cool/Low strip from
-    the reference dashboard. Uses the dashboard palette values so the
-    two pages look like one product."""
+    """Hot/Warm/Cool/Low counter card. Uses the project's shared
+    `.tc-kpi` style (defined in ui_theme._SHARED_CSS) so this strip
+    visually matches the cHAP dashboard + cedadmin Intelligence
+    counters — single source of truth for KPI cards across the app.
+    """
     return (
-        f'<div style="padding:14px 18px; background:#1e293b; '
-        f'border-radius:10px; border:1px solid #334155;">'
-        f'<div style="color:#94a3b8; font-size:0.78rem; font-weight:600; '
-        f'letter-spacing:0.06em; text-transform:uppercase;">'
-        f'{emoji} {label}</div>'
-        f'<div style="color:{color}; font-size:1.9rem; font-weight:700; '
-        f'line-height:1.1; margin-top:6px; font-variant-numeric:tabular-nums;">'
-        f'{count:,}</div>'
+        f'<div class="tc-kpi" style="--stripe: {color};">'
+        f'<div class="tc-kpi-label">{emoji} {label}</div>'
+        f'<div class="tc-kpi-value">{count:,}</div>'
         f'</div>'
     )
 

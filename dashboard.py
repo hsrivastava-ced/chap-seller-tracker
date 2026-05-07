@@ -783,23 +783,25 @@ def _kpi_card(
     invent a custom tooltip widget. A small "?" hint in the bottom
     corner makes the hover affordance discoverable.
     """
-    color_style = f"color:{value_color};" if value_color else ""
-    sub_html = f'<div class="kpi-sublabel">{sublabel}</div>' if sublabel else ""
-    foot_html = f'<div class="kpi-foot">{foot}</div>' if foot else ""
-    hint_html = (
-        '<div class="kpi-hint" aria-hidden="true">ⓘ hover</div>'
+    # Render via the shared `.tc-kpi` component (defined in
+    # ui_theme._SHARED_CSS) so cHAP and cedadmin use identical KPI
+    # cards. `value_color` becomes the top-stripe accent;
+    # `tooltip` becomes the ⓘ hover help. `foot` keeps the legacy
+    # extra-line slot below the value.
+    stripe = value_color or PALETTE["primary"]
+    safe_tooltip = (tooltip or "").replace('"', '&quot;').replace('<', '&lt;')
+    info_icon = (
+        f' <span class="tc-info" title="{safe_tooltip}">ⓘ</span>'
         if tooltip else ""
     )
-    # Escape double-quotes in the tooltip so the title attribute doesn't break.
-    safe_tooltip = tooltip.replace('"', '&quot;') if tooltip else ""
-    title_attr = f' title="{safe_tooltip}"' if safe_tooltip else ""
+    sub_html = f'<div class="tc-kpi-sub">{sublabel}</div>' if sublabel else ""
+    foot_html = f'<div class="tc-kpi-sub">{foot}</div>' if foot else ""
     return (
-        f'<div class="kpi-card"{title_attr}>'
-        f'<div class="kpi-label">{label}</div>'
+        f'<div class="tc-kpi" style="--stripe: {stripe};">'
+        f'<div class="tc-kpi-label">{label}{info_icon}</div>'
+        f'<div class="tc-kpi-value">{value}</div>'
         f'{sub_html}'
-        f'<div class="kpi-value" style="{color_style}">{value}</div>'
         f'{foot_html}'
-        f'{hint_html}'
         f'</div>'
     )
 
