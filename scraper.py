@@ -3026,65 +3026,86 @@ def main():
                         "continuing — plan column may stay as N/A."
                     )
 
-                # Diagnostic: pull the logged-in cHAP user email out of
-                # the rendered page so we can confirm WHICH account the
-                # scraper authenticated as. Searches every text node
-                # (excluding the data table) for a *@threecolts.com
-                # match and writes the first hit + the URL + the page
-                # title to results/debug/session_<app>.txt. Lets us
-                # cross-check against the account that sees plan badges
-                # in a manual browser session.
+                # Diagnostic: identify which cHAP account the scraper is
+                # logged in as. Previous TreeWalker version returned
+                # nothing — the topbar may render the email via React
+                # state that hadn't hydrated yet, or the email may live
+                # in an attribute (aria-label / title) instead of a
+                # text node. This version waits for cHAP to settle, then
+                # captures: every @threecolts.com hit anywhere (text or
+                # attribute), all relevant cookies, and the outerHTML of
+                # the topbar/header/avatar elements for manual inspection.
                 try:
                     safe_label_for_session = re.sub(
                         r"[^A-Za-z0-9_]+", "_", app_name
                     ).strip("_") or "app"
+                    # Give React time to fully hydrate the topbar.
+                    page.wait_for_timeout(1500)
                     session_info = page.evaluate("""() => {
-                        const found = new Set();
-                        // Walk every element OUTSIDE the seller data table
-                        // so we don't pick up sellers whose emails are also
-                        // @threecolts (test stores).
-                        const tables = document.querySelectorAll('table.ant-table-content, .ant-table-tbody');
-                        const skip = new Set();
-                        tables.forEach(t => skip.add(t));
-                        const walker = document.createTreeWalker(
-                            document.body, NodeFilter.SHOW_TEXT, null
-                        );
+                        const all_emails = new Set();
+                        // 1. Every text node in the document
+                        const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
                         let n;
-                        while ((n = walker.nextNode())) {
-                            let p = n.parentElement;
-                            let inTable = false;
-                            while (p) {
-                                if (skip.has(p)) { inTable = true; break; }
-                                if (p.tagName === 'TABLE') {
-                                    // Any table — skip to be safe
-                                    inTable = true;
-                                    break;
-                                }
-                                p = p.parentElement;
+                        while ((n = w.nextNode())) {
+                            const matches = (n.nodeValue || '').match(/[A-Za-z0-9._-]+@threecolts\\.com/g);
+                            if (matches) matches.forEach(m => all_emails.add(m));
+                        }
+                        // 2. Every element attribute
+                        document.body.querySelectorAll('*').forEach(el => {
+                            for (const attr of el.attributes) {
+                                const matches = (attr.value || '').match(/[A-Za-z0-9._-]+@threecolts\\.com/g);
+                                if (matches) matches.forEach(m => all_emails.add(m));
                             }
-                            if (inTable) continue;
-                            const m = n.nodeValue && n.nodeValue.match(/[A-Za-z0-9._-]+@threecolts\\.com/);
-                            if (m) found.add(m[0]);
+                        });
+                        // 3. Cookies (don't include values, just keys + lengths)
+                        const cookieKeys = document.cookie.split(';').map(c => {
+                            const [k, v] = c.split('=');
+                            return (k || '').trim() + '=(' + ((v || '').length) + ' chars)';
+                        });
+                        // 4. Topbar / header / avatar outerHTML — capture
+                        // up to 4000 chars so we can inspect manually.
+                        const sels = [
+                            '[class*="Topbar" i]',
+                            '[class*="topbar" i]',
+                            'header',
+                            '[class*="Avatar" i]',
+                            '[class*="Account" i]',
+                            '[class*="UserMenu" i]',
+                            '[class*="Profile" i]',
+                        ];
+                        const topbarHTML = [];
+                        for (const sel of sels) {
+                            const el = document.querySelector(sel);
+                            if (el && el.outerHTML) {
+                                topbarHTML.push('--- ' + sel + ' ---\\n' +
+                                    el.outerHTML.slice(0, 4000));
+                            }
                         }
                         return {
                             url: location.href,
                             title: document.title,
-                            emails_outside_table: Array.from(found),
+                            all_emails: Array.from(all_emails),
+                            cookieKeys,
+                            topbarHTML: topbarHTML.join('\\n\\n'),
                         };
                     }""")
                     debug_dir = Path("results/debug")
                     debug_dir.mkdir(parents=True, exist_ok=True)
-                    (debug_dir / f"session_{safe_label_for_session}.txt").write_text(
+                    fname = debug_dir / f"session_{safe_label_for_session}.txt"
+                    fname.write_text(
                         f"app: {app_name}\n"
                         f"url: {session_info.get('url')}\n"
                         f"title: {session_info.get('title')}\n"
-                        f"emails_outside_table: {session_info.get('emails_outside_table')}\n",
+                        f"all_emails (anywhere): {session_info.get('all_emails')}\n"
+                        f"cookies: {session_info.get('cookieKeys')}\n"
+                        f"\n--- TOPBAR / HEADER OUTERHTML ---\n"
+                        f"{session_info.get('topbarHTML', '')}\n",
                         encoding="utf-8",
                     )
                     logging.info(
                         f"   ↳ session diagnostic for {app_name}: "
-                        f"emails_outside_table="
-                        f"{session_info.get('emails_outside_table')}"
+                        f"emails={session_info.get('all_emails')} "
+                        f"({fname})"
                     )
                 except Exception as session_err:
                     logging.debug(f"   ↳ session diagnostic skipped: {session_err}")
