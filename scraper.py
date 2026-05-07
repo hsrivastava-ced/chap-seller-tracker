@@ -3294,6 +3294,33 @@ def main():
     blocked = [r for r in all_reports if r.status == "blocked"]
     pending = [r for r in all_reports if r.status == "pending_review"]
 
+    # Diagnostic: dump every validator report to results/debug so we can
+    # see which check is blocking each app without grepping live workflow
+    # logs. Verified necessary 2026-05-08: michael was being silently
+    # blocked, the rich data went to gitignored results/staging/, and
+    # the latest/ CSV stayed at a prior broken state — the only way to
+    # see the block reason was the workflow log mid-stream.
+    try:
+        debug_dir = Path("results/debug")
+        debug_dir.mkdir(parents=True, exist_ok=True)
+        lines = []
+        for r in all_reports:
+            lines.append(
+                f"=== {r.app_name} / {r.kind} → {r.status.upper()} ==="
+            )
+            for chk in r.checks:
+                lines.append(f"  - {chk.name}: {chk.status}")
+                for obs in chk.observations:
+                    lines.append(f"      · {obs}")
+                for rec in chk.recommendations:
+                    lines.append(f"      → {rec}")
+            lines.append("")
+        (debug_dir / "validator_decisions.txt").write_text(
+            "\n".join(lines) + "\n", encoding="utf-8",
+        )
+    except Exception as diag_err:
+        logging.debug(f"validator-decision dump skipped: {diag_err}")
+
     # Per-app promotion: an app is "blocked" if EITHER its sellers OR
     # uninstalls report flagged blocked. Apps with clean reports get
     # promoted to latest/ even when other apps fail. Without this an
