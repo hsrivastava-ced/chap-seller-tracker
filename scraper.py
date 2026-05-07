@@ -3126,10 +3126,32 @@ def main():
                             )
                             continue
 
+                    # Per-pass try/except. Verified 2026-05-07 on
+                    # michael: pass 1 (shopify) captured 254 rows,
+                    # pass 2 (woocommerce) timed out waiting for the
+                    # table to render (empty-state shape cHAP uses
+                    # when a framework has zero sellers wasn't
+                    # matched by our selector). Without this guard
+                    # the outer except discarded all 254 pass-1 rows.
                     pass_trace: list = []
-                    pass_rows = scrape_seller_table(
-                        page, app_name, trace_sink=pass_trace,
-                    )
+                    try:
+                        pass_rows = scrape_seller_table(
+                            page, app_name, trace_sink=pass_trace,
+                        )
+                    except Exception as pass_err:
+                        # Framework has no sellers (empty-state
+                        # variant we didn't match) or cHAP returned
+                        # nothing. Treat as 0 rows for this pass and
+                        # continue with the next framework.
+                        err_msg = str(pass_err)[:200] or pass_err.__class__.__name__
+                        logging.warning(
+                            f"   ↳ framework='{fw or '(default)'}' "
+                            f"raised for {app_name}: {err_msg}. "
+                            f"Treating as 0 rows; subsequent frameworks "
+                            f"continue."
+                        )
+                        continue
+
                     seller_trace.extend(pass_trace)
                     logging.info(
                         f"   ↳ framework='{fw or '(default)'}' "
