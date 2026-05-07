@@ -1,0 +1,47 @@
+app: shein
+url: https://app-v2-frontend.cifapps.com/panel/68271f967f7947780c0fc2fc/seller
+title: common-home-admin-panel
+all_emails (anywhere): ['schauhan@threecolts.com', 'qmahdi@threecolts.com']
+cookies: ['=(0 chars)']
+
+--- localStorage ---
+[]
+
+--- sessionStorage ---
+[
+  {
+    "key": "9b940a376a5062b6e43990b3ff3338e4",
+    "len": 4,
+    "preview": "true"
+  },
+  {
+    "key": "481f979511ec31b1ebfd5eeb86c1916e",
+    "len": 37,
+    "preview": "{\"source\":\"shopify\",\"target\":\"shein\"}"
+  },
+  {
+    "key": "d732b89e609f8f262b7e9b08b303b7d5",
+    "len": 62,
+    "preview": "Thu May 07 2026 18:00:19 GMT+0000 (Coordinated Universal Time)"
+  },
+  {
+    "key": "bf01f56bbacff9dd496a8dd516562b29",
+    "len": 915,
+    "preview": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJ1c2VyX2lkIjoiNjgyNzFmOTY3Zjc5NDc3ODBjMGZjMmZjIiwicm9sZSI6ImJkYSIsImV4cCI6MTc3ODE4MDQxOCwiaXNzIjoiaHR0cHM6XC9cL2FwcHMuY2VkY29tbWVyY2UuY29tIiwidG9rZW5faWQiOiI2OWZ"
+  },
+  {
+    "key": "62390ea4803b32611ab0fb71baa44f03",
+    "len": 1420,
+    "preview": "eyJjdXJyZW50QXBwIjoic2hlaW4iLCJhcHBUb2tlbiI6ImV5SjBlWEFpT2lKS1YxUWlMQ0poYkdjaU9pSlNVekkxTmlKOS5leUoxYzJWeVgybGtJam9pTmpVeE5UUXpabVl5WlRGaE4yRmhPV1V3TUdReE1UazVJaXdpY205c1pTSTZJbUZ3Y0NJc0ltbHpjeUk2SW1o"
+  },
+  {
+    "key": "a71ef279c4e73c0d24f9761d7beae476",
+    "len": 26,
+    "preview": "hsrivastava@threecolts.com"
+  },
+  {
+    "key": "cef907354c3f83a232ef52177fa9e9f6",
+    "len": 24,
+    "preview": "68271f967f7947780c0fc2fc"
+  }
+]

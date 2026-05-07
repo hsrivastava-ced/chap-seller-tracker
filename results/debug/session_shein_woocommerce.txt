@@ -1,0 +1,47 @@
+app: shein_woocommerce
+url: https://app-v2-frontend.cifapps.com/panel/686fa2dc9bd8a284bb06e68a/seller
+title: common-home-admin-panel
+all_emails (anywhere): ['abhpandey@threecolts.com']
+cookies: ['=(0 chars)']
+
+--- localStorage ---
+[]
+
+--- sessionStorage ---
+[
+  {
+    "key": "9b940a376a5062b6e43990b3ff3338e4",
+    "len": 4,
+    "preview": "true"
+  },
+  {
+    "key": "62390ea4803b32611ab0fb71baa44f03",
+    "len": 876,
+    "preview": "eyJjdXJyZW50QXBwIjoic2hlaW5fd29vY29tbWVyY2UiLCJhcHBUb2tlbiI6ImV5SjBlWEFpT2lKS1YxUWlMQ0poYkdjaU9pSlNVekkxTmlKOS5leUoxYzJWeVgybGtJam9pTmpnMlptRXlaR001WW1RNFlUSTROR0ppTURabE5qZzNJaXdpY205c1pTSTZJbUZ3Y0NJ"
+  },
+  {
+    "key": "8e770f668699b04b72cd6cc7c358e30f",
+    "len": 576,
+    "preview": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJ1c2VyX2lkIjoiNjg2ZmEyZGM5YmQ4YTI4NGJiMDZlNjhhIiwicm9sZSI6ImFkbWluIiwiZXhwIjoxNzc4MTgwODE1LCJpc3MiOiJodHRwczpcL1wvYXBwcy5jZWRjb21tZXJjZS5jb20iLCJ0b2tlbl9pZCI6IjY"
+  },
+  {
+    "key": "409ca63399e0e17f78f8beb47a35dcf7",
+    "len": 41,
+    "preview": "{\"source\":\"woocommerce\",\"target\":\"shein\"}"
+  },
+  {
+    "key": "1c03c7def23a3c7fca4d21a6f0f4c025",
+    "len": 62,
+    "preview": "Thu May 07 2026 18:06:56 GMT+0000 (Coordinated Universal Time)"
+  },
+  {
+    "key": "cef907354c3f83a232ef52177fa9e9f6",
+    "len": 24,
+    "preview": "686fa2dc9bd8a284bb06e68a"
+  },
+  {
+    "key": "fb52f9dfa68ee5ce6324a64bd4e17627",
+    "len": 5,
+    "preview": "admin"
+  }
+]

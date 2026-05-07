@@ -1,0 +1,47 @@
+app: shopify_temu_eu
+url: https://app-v2-frontend.cifapps.com/panel/6891d7f0ef3dd13c1e0f4032/seller
+title: common-home-admin-panel
+all_emails (anywhere): ['avishwakrma@threecolts.com', 'shussain@threecolts.com']
+cookies: ['=(0 chars)']
+
+--- localStorage ---
+[]
+
+--- sessionStorage ---
+[
+  {
+    "key": "ca0716bd9d69c5f86d918c9fa88c7ac3",
+    "len": 25,
+    "preview": "yashmishra@threecolts.com"
+  },
+  {
+    "key": "9b940a376a5062b6e43990b3ff3338e4",
+    "len": 4,
+    "preview": "true"
+  },
+  {
+    "key": "be3b892f4cac4e70af688af624fd5461",
+    "len": 36,
+    "preview": "{\"source\":\"shopify\",\"target\":\"temu\"}"
+  },
+  {
+    "key": "62390ea4803b32611ab0fb71baa44f03",
+    "len": 920,
+    "preview": "eyJjdXJyZW50QXBwIjoic2hvcGlmeV90ZW11X2V1IiwiYXBwVG9rZW4iOiJleUowZVhBaU9pSktWMVFpTENKaGJHY2lPaUpTVXpJMU5pSjkuZXlKMWMyVnlYMmxrSWpvaU5qZ3dOek5rWldVNU5EY3dNRFk0T1RRMk1ESTRZek0zSWl3aWNtOXNaU0k2SW1Gd2NDSXNJ"
+  },
+  {
+    "key": "cef907354c3f83a232ef52177fa9e9f6",
+    "len": 24,
+    "preview": "6891d7f0ef3dd13c1e0f4032"
+  },
+  {
+    "key": "18cc6ee07d90cf79c4d27421243f98fc",
+    "len": 62,
+    "preview": "Thu May 07 2026 18:05:15 GMT+0000 (Coordinated Universal Time)"
+  },
+  {
+    "key": "9cebb1ec45ffd481c822f589ec5a45b9",
+    "len": 574,
+    "preview": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJ1c2VyX2lkIjoiNjg5MWQ3ZjBlZjNkZDEzYzFlMGY0MDMyIiwicm9sZSI6ImJkYSIsImV4cCI6MTc3ODE4MDcxNSwiaXNzIjoiaHR0cHM6XC9cL2FwcHMuY2VkY29tbWVyY2UuY29tIiwidG9rZW5faWQiOiI2OWZ"
+  }
+]
