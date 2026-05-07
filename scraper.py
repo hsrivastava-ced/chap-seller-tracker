@@ -766,6 +766,39 @@ def extract_row_data(row, header_index: dict, aliases: dict = HEADER_ALIASES):
         except Exception:
             pass
 
+    # Plan: cHAP renders the plan in a styled badge (`.inte--Badge`).
+    # On most apps inner_text() picks up the badge text fine (shein's
+    # "Basic"/"Starter" come through this way), but on some panels the
+    # cell ALSO contains a hidden "N/A" placeholder span that
+    # inner_text scoops up first. When that happens we fall back to:
+    #   1. The visible text of `.inte--Badge-content` (the styled box).
+    #   2. The cell's inner_html stripped of tags (last-ditch).
+    # If the cell really does only contain "N/A" (no badge) we keep
+    # "N/A" — that's the legitimate "not paid" signal.
+    plan_idx = header_index.get("plan")
+    if plan_idx is not None and 0 <= plan_idx < n:
+        current = (result.get("plan") or "").strip()
+        if not current or current.upper() == "N/A":
+            try:
+                plan_cell = cells.nth(plan_idx)
+                badge = plan_cell.locator(
+                    ".inte--Badge-content, .inte--Badge, [class*='Badge-content'], [class*='Badge']"
+                ).first
+                if badge.count() > 0:
+                    bt = re.sub(r"\s+", " ", (badge.inner_text() or "")).strip()
+                    if bt and bt.upper() != "N/A":
+                        result["plan"] = bt
+                else:
+                    # No badge element — try title/aria-label on the cell
+                    title = (plan_cell.get_attribute("title") or "").strip()
+                    aria = (plan_cell.get_attribute("aria-label") or "").strip()
+                    fallback = title or aria
+                    if fallback and fallback.upper() != "N/A":
+                        result["plan"] = fallback
+            except Exception:
+                # Diagnostic-only path; never let it block extraction.
+                pass
+
     # store_url normalization — drop trailing slash so diffs against
     # Supabase stay stable.
     if "store_url" in result and result["store_url"]:
@@ -1134,6 +1167,31 @@ def _scrape_paginated_ant_table(
                     )
                 except Exception as row_dump_err:
                     logging.warning(f"   ↳ could not dump first row HTML: {row_dump_err}")
+
+        # One-shot diagnostic: dump the FIRST row's plan-cell HTML on
+        # page 1 of each app. michael + temu_eu come back 100% N/A while
+        # the live cHAP UI clearly shows real plan badges; this lets us
+        # see the actual cell structure offline without rerunning the
+        # scrape. Cheap (one cell per scrape per app) and overwritten
+        # each run so we always have a fresh sample.
+        if (
+            prev_header_index is None
+            and rows.count() > 0
+            and "plan" in (header_index or {})
+        ):
+            try:
+                p_idx = header_index["plan"]
+                first_plan_html = (
+                    rows.nth(0).locator("td").nth(p_idx).evaluate("el => el.outerHTML")
+                ) or ""
+                fname = f"debug_plan_cell_{safe_label}.html"
+                Path(fname).write_text(first_plan_html, encoding="utf-8")
+                logging.info(
+                    f"   ↳ plan cell HTML dumped to '{fname}' "
+                    f"({len(first_plan_html)} chars)"
+                )
+            except Exception as plan_dump_err:
+                logging.debug(f"   ↳ plan cell dump skipped: {plan_dump_err}")
 
         new_on_page = 0
         for i in range(rows.count()):
