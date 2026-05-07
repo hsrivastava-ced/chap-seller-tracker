@@ -3043,63 +3043,61 @@ def main():
                     page.wait_for_timeout(1500)
                     session_info = page.evaluate("""() => {
                         const all_emails = new Set();
-                        // 1. Every text node in the document
                         const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null);
                         let n;
                         while ((n = w.nextNode())) {
                             const matches = (n.nodeValue || '').match(/[A-Za-z0-9._-]+@threecolts\\.com/g);
                             if (matches) matches.forEach(m => all_emails.add(m));
                         }
-                        // 2. Every element attribute
                         document.body.querySelectorAll('*').forEach(el => {
                             for (const attr of el.attributes) {
                                 const matches = (attr.value || '').match(/[A-Za-z0-9._-]+@threecolts\\.com/g);
                                 if (matches) matches.forEach(m => all_emails.add(m));
                             }
                         });
-                        // 3. Cookies (don't include values, just keys + lengths)
                         const cookieKeys = document.cookie.split(';').map(c => {
                             const [k, v] = c.split('=');
                             return (k || '').trim() + '=(' + ((v || '').length) + ' chars)';
                         });
-                        // 4. Topbar / header / avatar outerHTML — capture
-                        // up to 4000 chars so we can inspect manually.
-                        const sels = [
-                            '[class*="Topbar" i]',
-                            '[class*="topbar" i]',
-                            'header',
-                            '[class*="Avatar" i]',
-                            '[class*="Account" i]',
-                            '[class*="UserMenu" i]',
-                            '[class*="Profile" i]',
-                        ];
-                        const topbarHTML = [];
-                        for (const sel of sels) {
-                            const el = document.querySelector(sel);
-                            if (el && el.outerHTML) {
-                                topbarHTML.push('--- ' + sel + ' ---\\n' +
-                                    el.outerHTML.slice(0, 4000));
+                        // localStorage / sessionStorage keys + value sizes
+                        // — UI prefs (Customize Grid columns) are likely
+                        // stored here per-browser-instance.
+                        const dumpStorage = (s) => {
+                            const out = [];
+                            try {
+                                for (let i = 0; i < s.length; i++) {
+                                    const k = s.key(i);
+                                    const v = s.getItem(k) || '';
+                                    out.push({key: k, len: v.length, preview: v.slice(0, 200)});
+                                }
+                            } catch (e) {
+                                out.push({error: String(e)});
                             }
-                        }
+                            return out;
+                        };
                         return {
                             url: location.href,
                             title: document.title,
                             all_emails: Array.from(all_emails),
                             cookieKeys,
-                            topbarHTML: topbarHTML.join('\\n\\n'),
+                            localStorage: dumpStorage(localStorage),
+                            sessionStorage: dumpStorage(sessionStorage),
                         };
                     }""")
                     debug_dir = Path("results/debug")
                     debug_dir.mkdir(parents=True, exist_ok=True)
                     fname = debug_dir / f"session_{safe_label_for_session}.txt"
+                    import json as _json
                     fname.write_text(
                         f"app: {app_name}\n"
                         f"url: {session_info.get('url')}\n"
                         f"title: {session_info.get('title')}\n"
                         f"all_emails (anywhere): {session_info.get('all_emails')}\n"
                         f"cookies: {session_info.get('cookieKeys')}\n"
-                        f"\n--- TOPBAR / HEADER OUTERHTML ---\n"
-                        f"{session_info.get('topbarHTML', '')}\n",
+                        f"\n--- localStorage ---\n"
+                        f"{_json.dumps(session_info.get('localStorage', []), indent=2)}\n"
+                        f"\n--- sessionStorage ---\n"
+                        f"{_json.dumps(session_info.get('sessionStorage', []), indent=2)}\n",
                         encoding="utf-8",
                     )
                     logging.info(
