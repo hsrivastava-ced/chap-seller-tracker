@@ -243,13 +243,21 @@ def scrape_section(
 # ---------------------------------------------------------------------
 # CLI: `python -m panels.cedcommerce_admin <app_id> [<section_id>]`
 # ---------------------------------------------------------------------
-def _output_paths(app_id: str, section_id: str) -> tuple[Path, Path, Path]:
-    """Return (latest_csv, history_csv, stamp_file) paths for this run."""
+def _output_paths(app_id: str, section_id: str) -> tuple[Path, Path, Path, Path]:
+    """Return (latest_csv, previous_csv, history_csv, stamp_file) paths.
+
+    `previous_csv` lives next to `latest_csv` in cedadmin_data/latest/
+    (which IS committed back to git, unlike history/). Each scrape
+    rotates the OLD latest into previous BEFORE writing the new latest,
+    so the dashboard always has a two-snapshot diff available without
+    needing the gitignored history tree.
+    """
     latest = LATEST_DIR / f"{app_id}__{section_id}.csv"
+    previous = LATEST_DIR / f"{app_id}__{section_id}.previous.csv"
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H-%M-%SZ")
     history = HISTORY_DIR / stamp / f"{app_id}__{section_id}.csv"
     stamp_file = LATEST_DIR / f"{app_id}__{section_id}.stamp"
-    return latest, history, stamp_file
+    return latest, previous, history, stamp_file
 
 
 def _write_csv(rows: list[dict], out_path: Path) -> None:
@@ -297,7 +305,19 @@ def main() -> int:
 
     rows = scrape_section(app_id, section_id, username=user, password=pw)
 
-    latest, history, stamp_file = _output_paths(app_id, section_id)
+    latest, previous, history, stamp_file = _output_paths(app_id, section_id)
+
+    # Rotate the prior latest → previous BEFORE writing the new
+    # latest. This gives the dashboard a two-snapshot diff (current
+    # vs prior) for the "What changed since last sync" section.
+    if latest.exists():
+        try:
+            import shutil
+            shutil.copy2(latest, previous)
+            LOGGER.info(f"rotated prior latest → {previous}")
+        except Exception as err:
+            LOGGER.warning(f"couldn't rotate prior latest to previous: {err}")
+
     _write_csv(rows, latest)
     _write_csv(rows, history)
     stamp_file.write_text(

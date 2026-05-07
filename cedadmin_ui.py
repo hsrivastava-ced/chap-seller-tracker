@@ -84,18 +84,30 @@ TIER_BADGE_BG = {tier: color for tier, color in TIER_PALETTE.items()}
 # Data load (cached)
 # --------------------------------------------------------------------
 @st.cache_data(ttl=300, show_spinner=False)
-def _load_walmart_us() -> tuple[list[dict], Optional[str]]:
-    """Returns (normalized_rows, run_stamp). Empty list if file missing."""
+def _load_walmart_us() -> tuple[list[dict], list[dict], Optional[str]]:
+    """Returns (current_normalized, previous_normalized, run_stamp).
+
+    `previous_normalized` is empty until the second scrape runs, since
+    the rotation only kicks in when the scraper has a prior latest to
+    move aside. The "What changed" section silently hides itself in
+    that case.
+    """
     csv_path = DATA_DIR / "walmart_us__analytics.csv"
+    prev_path = DATA_DIR / "walmart_us__analytics.previous.csv"
     stamp_path = DATA_DIR / "walmart_us__analytics.stamp"
     if not csv_path.exists():
-        return [], None
+        return [], [], None
+    today = date.today()
     with csv_path.open(encoding="utf-8") as f:
         raw_rows = list(csv.DictReader(f))
-    today = date.today()
     norm = [ca.normalize_row(r, today=today) for r in raw_rows]
+    prev = []
+    if prev_path.exists():
+        with prev_path.open(encoding="utf-8") as f:
+            prev_raw = list(csv.DictReader(f))
+        prev = [ca.normalize_row(r, today=today) for r in prev_raw]
     stamp = stamp_path.read_text(encoding="utf-8").strip() if stamp_path.exists() else None
-    return norm, stamp
+    return norm, prev, stamp
 
 
 def _gate() -> auth.UserPrincipal:
@@ -134,7 +146,7 @@ def main() -> None:
     )
     apply_shared_theme()  # cHAP/cedadmin share the same look + sidebar.
 
-    rows, stamp = _load_walmart_us()
+    rows, prev_rows, stamp = _load_walmart_us()
     if not rows:
         st.title("🛒 CedCommerce Admin")
         st.warning(
@@ -177,7 +189,7 @@ def main() -> None:
     )
 
     with tab_dash:
-        _render_dashboard_tab(rows, today=today)
+        _render_dashboard_tab(rows, today=today, prev_rows=prev_rows)
     with tab_intel:
         _render_intelligence_tab(rows, today=today, principal=principal)
     with tab_table:
@@ -185,9 +197,207 @@ def main() -> None:
 
 
 # --------------------------------------------------------------------
+# What changed since last sync — top-of-Dashboard delta section.
+# --------------------------------------------------------------------
+def _render_whats_changed(
+    rows: list[dict], prev_rows: list[dict], *, today: date,
+) -> None:
+    diff = ca.snapshot_diff(rows, prev_rows, today=today)
+    s = diff["summary"]
+
+    _section(
+        "What changed since the previous sync",
+        sub="Diff between this scrape and the one before it. Hides "
+            "automatically on the very first run after onboarding.",
+    )
+
+    # Delta KPI strip — green for positive, red for negative.
+    mrr_delta = s["mrr_delta"]
+    mrr_color = (
+        "#22c55e" if mrr_delta > 0 else
+        "#ef4444" if mrr_delta < 0 else
+        PALETTE["text_soft"]
+    )
+    mrr_arrow = "↑" if mrr_delta > 0 else ("↓" if mrr_delta < 0 else "↔")
+    paid_delta = s["current_paid"] - s["previous_paid"]
+    paid_arrow = "↑" if paid_delta > 0 else ("↓" if paid_delta < 0 else "↔")
+    paid_color = (
+        "#22c55e" if paid_delta > 0 else
+        "#ef4444" if paid_delta < 0 else
+        PALETTE["text_soft"]
+    )
+
+    cols = st.columns(5)
+    _kpi(
+        cols[0],
+        label="📈 MRR change",
+        value=f"{mrr_arrow} ${abs(mrr_delta):,.0f}",
+        sub=f"${s['mrr_now']:,.0f} now (was ${s['mrr_prev']:,.0f})",
+        color=mrr_color,
+        help_text=(
+            "Net MRR change between snapshots — sum of (new payers + "
+            "upgrades) minus (churn + downgrades). The single most "
+            "important sales-cycle health metric."
+        ),
+    )
+    _kpi(
+        cols[1],
+        label="💳 Paid sellers Δ",
+        value=f"{paid_arrow} {abs(paid_delta):,}",
+        sub=f"{s['current_paid']:,} now (was {s['previous_paid']:,})",
+        color=paid_color,
+        help_text="Net change in active+paid sellers between scrapes.",
+    )
+    _kpi(
+        cols[2],
+        label="🆕 New payers",
+        value=f"{s['new_payers']:,}",
+        sub="Status flipped to Purchased",
+        color="#22c55e",
+        help_text=(
+            "Sellers whose purchase_status moved to Purchased since "
+            "the previous scrape. Could be new sign-ups OR existing "
+            "free-tier sellers who upgraded."
+        ),
+    )
+    _kpi(
+        cols[3],
+        label="❌ Newly churned",
+        value=f"{s['newly_churned']:,}",
+        sub="Was Purchased, no longer is",
+        color="#ef4444",
+        help_text=(
+            "Sellers whose purchase_status moved off Purchased. Could "
+            "be License Expired, Trial Expired, or uninstalled."
+        ),
+    )
+    _kpi(
+        cols[4],
+        label="🔁 Plan changes",
+        value=f"{s['plan_upgrades'] + s['plan_downgrades']:,}",
+        sub=f"{s['plan_upgrades']:,} ↑ · {s['plan_downgrades']:,} ↓",
+        color="#a78bfa",
+        help_text=(
+            "Sellers who changed plan within Purchased status. Up = "
+            "MRR went up, Down = MRR went down. Filters on this in "
+            "Intelligence to find expansion/contraction patterns."
+        ),
+    )
+
+    # Small extra-counts strip — installs / uninstalls.
+    cols2 = st.columns(2)
+    _kpi(
+        cols2[0],
+        label="🟢 New installs",
+        value=f"{s['new_installs']:,}",
+        sub="Brand-new accounts since last sync",
+        color="#0ea5e9",
+        help_text="Sellers seen for the first time OR moved from "
+                  "uninstall back to install.",
+    )
+    _kpi(
+        cols2[1],
+        label="🗑 New uninstalls",
+        value=f"{s['new_uninstalls']:,}",
+        sub="Was install, now uninstall",
+        color="#94a3b8",
+        help_text="Sellers whose installation_status flipped to "
+                  "uninstall since the previous scrape.",
+    )
+
+    # Detail tables for each change category — collapsed by default
+    # so the strip stays scannable, expanded when curious.
+    if s["new_payers"]:
+        with st.expander(
+            f"🆕 New payers detail — {s['new_payers']:,} sellers",
+            expanded=False,
+        ):
+            df = pd.DataFrame(diff["new_payer_rows"])
+            if not df.empty:
+                st.dataframe(
+                    df, hide_index=True, use_container_width=True,
+                    column_config={
+                        "mrr": st.column_config.NumberColumn(
+                            "MRR ($)", format="$%.2f",
+                            help="Monthly-equivalent revenue from this new payer."
+                        ),
+                    },
+                )
+
+    if s["newly_churned"]:
+        with st.expander(
+            f"❌ Newly churned detail — {s['newly_churned']:,} sellers",
+            expanded=False,
+        ):
+            df = pd.DataFrame(diff["newly_churned_rows"])
+            if not df.empty:
+                st.dataframe(
+                    df, hide_index=True, use_container_width=True,
+                    column_config={
+                        "previous_mrr": st.column_config.NumberColumn(
+                            "Previous MRR ($)", format="$%.2f",
+                            help="What this seller was paying before churning."
+                        ),
+                    },
+                )
+
+    if s["plan_upgrades"] + s["plan_downgrades"]:
+        with st.expander(
+            f"🔁 Plan changes detail — "
+            f"{s['plan_upgrades'] + s['plan_downgrades']:,} sellers",
+            expanded=False,
+        ):
+            df = pd.DataFrame(diff["plan_change_rows"])
+            if not df.empty:
+                st.dataframe(
+                    df, hide_index=True, use_container_width=True,
+                    column_config={
+                        "previous_mrr": st.column_config.NumberColumn(
+                            "Prev MRR", format="$%.2f",
+                        ),
+                        "new_mrr": st.column_config.NumberColumn(
+                            "New MRR", format="$%.2f",
+                        ),
+                        "delta": st.column_config.NumberColumn(
+                            "Δ MRR", format="$%+.2f",
+                            help="Positive = upgrade, negative = downgrade.",
+                        ),
+                    },
+                )
+
+    if s["new_uninstalls"]:
+        with st.expander(
+            f"🗑 Newly uninstalled detail — {s['new_uninstalls']:,} sellers",
+            expanded=False,
+        ):
+            df = pd.DataFrame(diff["newly_uninstalled_rows"])
+            if not df.empty:
+                st.dataframe(
+                    df, hide_index=True, use_container_width=True,
+                    column_config={
+                        "previous_mrr": st.column_config.NumberColumn(
+                            "Was paying ($)", format="$%.2f",
+                        ),
+                    },
+                )
+
+    st.divider()
+
+
+# --------------------------------------------------------------------
 # Dashboard tab
 # --------------------------------------------------------------------
-def _render_dashboard_tab(rows: list[dict], today: date) -> None:
+def _render_dashboard_tab(
+    rows: list[dict], today: date, prev_rows: list[dict] | None = None,
+) -> None:
+    # ===================================================================
+    # Top-of-tab: "What changed since last sync" — first thing the eye
+    # lands on so an operator opening the page sees deltas before
+    # absolute numbers. Hidden when there's no previous snapshot yet.
+    # ===================================================================
+    if prev_rows:
+        _render_whats_changed(rows, prev_rows, today=today)
+
     m = ca.mrr_breakdown(rows)
     install_count = sum(
         1 for r in rows if (r.get("installation_status") or "").lower() == "install"
@@ -786,6 +996,90 @@ def _render_dashboard_tab(rows: list[dict], today: date) -> None:
                     format="%.1f%%",
                     help="still_paid_now ÷ installs. Long-run retention rate "
                          "for the cohort.",
+                ),
+            },
+        )
+
+    # =================================================================
+    # Section: Revenue concentration (Pareto)
+    # =================================================================
+    st.write("")
+    _section(
+        "Revenue concentration",
+        sub="What share of MRR sits with the top X% of paying sellers? "
+            "If concentration is high, protecting those few accounts IS "
+            "your retention strategy.",
+    )
+    rc = ca.revenue_concentration(rows)
+    if rc["active_paid"] and rc["total_mrr"]:
+        ccols = st.columns(4)
+        for i, (label, share, sub_help) in enumerate([
+            ("Top 1%",  rc["top_1_pct_share"],
+             "MRR carried by the top-1% of paying sellers (by MRR)."),
+            ("Top 5%",  rc["top_5_pct_share"],
+             "MRR carried by the top 5%."),
+            ("Top 10%", rc["top_10_pct_share"],
+             "MRR carried by the top 10%."),
+            ("Top 20%", rc["top_20_pct_share"],
+             "MRR carried by the top 20% — the classic Pareto lens."),
+        ]):
+            _kpi(
+                ccols[i],
+                label=label,
+                value=f"{share * 100:.1f}%",
+                sub=f"of ${rc['total_mrr']:,.0f} total MRR",
+                color="#a78bfa",
+                help_text=sub_help,
+            )
+
+    # =================================================================
+    # Section: Save-call list — high MRR + low health
+    # =================================================================
+    st.write("")
+    _section(
+        "Save-call list (highest MRR × lowest health)",
+        sub="Currently-paying sellers ranked by mrr × (100 − health). "
+            "These are the accounts most worth a proactive call before "
+            "renewal day.",
+    )
+    risk_rows = ca.predictive_churn_risk(rows, today=today)[:25]
+    if risk_rows:
+        df = pd.DataFrame(risk_rows)
+        df = df[[
+            "email", "shop_url", "country", "mrr", "health",
+            "days_since_login", "days_to_expiration", "failure_rate",
+            "risk_score",
+        ]]
+        st.dataframe(
+            df, hide_index=True, use_container_width=True,
+            column_config={
+                "email":     st.column_config.TextColumn("Email"),
+                "shop_url":  st.column_config.TextColumn("Shop"),
+                "country":   st.column_config.TextColumn("Country"),
+                "mrr":       st.column_config.NumberColumn(
+                    "MRR ($)", format="$%.2f",
+                ),
+                "health":    st.column_config.ProgressColumn(
+                    "Health", min_value=0, max_value=100, format="%d",
+                    help="0 = at risk, 100 = healthy.",
+                ),
+                "days_since_login": st.column_config.NumberColumn(
+                    "Days idle", format="%d",
+                    help="Days since last login. Higher = more disengaged.",
+                ),
+                "days_to_expiration": st.column_config.NumberColumn(
+                    "Days to renew", format="%d",
+                    help="Negative = already past expiration.",
+                ),
+                "failure_rate": st.column_config.NumberColumn(
+                    "Failure %", format="%.1f%%",
+                    help="failed_orders ÷ total_orders × 100.",
+                ),
+                "risk_score": st.column_config.ProgressColumn(
+                    "Risk score", min_value=0,
+                    max_value=max((r["risk_score"] for r in risk_rows), default=1),
+                    format="%.0f",
+                    help="MRR × (100 − Health). Highest = call FIRST.",
                 ),
             },
         )

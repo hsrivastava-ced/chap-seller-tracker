@@ -604,6 +604,268 @@ def score_opportunity(row: dict, today: Optional[date] = None) -> int:
     return int(round(min(100.0, s)))
 
 
+def revenue_concentration(normalized_rows: Iterable[dict]) -> dict:
+    """Pareto / revenue-concentration analysis.
+
+    Returns:
+        {
+          "total_mrr": float,
+          "active_paid": int,
+          "top_1_pct_share": float,    # 0..1 — what fraction of MRR
+          "top_5_pct_share": float,    # the top X% of sellers carry
+          "top_10_pct_share": float,
+          "top_20_pct_share": float,
+          "top_n_rows": [...],         # the top 50 sellers by MRR
+        }
+
+    Knowing concentration matters: if top 5% carries 60% of MRR, the
+    save list for those 5% is the entire revenue protection plan.
+    """
+    paying = [
+        r for r in (normalized_rows or [])
+        if (r.get("installation_status") or "").lower() == "install"
+        and (r.get("purchase_status") or "") == "Purchased"
+        and (r.get("_mrr_usd") or 0) > 0
+    ]
+    paying.sort(key=lambda r: -(r.get("_mrr_usd") or 0))
+
+    total_mrr = sum((r.get("_mrr_usd") or 0) for r in paying)
+    active_paid = len(paying)
+
+    def _share(pct: float) -> float:
+        if active_paid == 0 or total_mrr == 0:
+            return 0.0
+        n = max(1, int(round(active_paid * pct)))
+        s = sum((r.get("_mrr_usd") or 0) for r in paying[:n])
+        return round(s / total_mrr, 4)
+
+    return {
+        "total_mrr": round(total_mrr, 2),
+        "active_paid": active_paid,
+        "top_1_pct_share":  _share(0.01),
+        "top_5_pct_share":  _share(0.05),
+        "top_10_pct_share": _share(0.10),
+        "top_20_pct_share": _share(0.20),
+        "top_n_rows": paying[:50],
+    }
+
+
+def predictive_churn_risk(
+    normalized_rows: Iterable[dict], *, today: Optional[date] = None,
+) -> list[dict]:
+    """High-MRR + low-health = save-call list.
+
+    Combines score_health() with current MRR so the "biggest revenue
+    we're about to lose" sellers float to the top. Returns currently
+    paying sellers sorted by `risk_score` desc:
+
+        [{"mid", "email", "shop_url", "country", "mrr",
+          "health", "days_since_login", "days_to_expiration",
+          "failure_rate", "risk_score"}, ...]
+
+    risk_score = mrr × (100 - health) — naïve weighting that's good
+    enough for a save-call ranking. Operator can sort by health alone
+    if they want a non-MRR-weighted view.
+    """
+    today = today or date.today()
+    out = []
+    for r in normalized_rows or []:
+        if (r.get("installation_status") or "").lower() != "install":
+            continue
+        if (r.get("purchase_status") or "") != "Purchased":
+            continue
+        mrr = r.get("_mrr_usd") or 0
+        if mrr <= 0:
+            continue
+        health = score_health(r, today=today)
+        out.append({
+            "mid": r.get("mid"),
+            "email": r.get("email"),
+            "shop_url": r.get("shop_url"),
+            "country": r.get("country") or "—",
+            "mrr": mrr,
+            "health": health,
+            "days_since_login": r.get("_days_since_login"),
+            "days_to_expiration": r.get("_days_to_expiration"),
+            "failure_rate": round(r.get("_failure_rate", 0) * 100, 1),
+            "risk_score": round(mrr * (100 - health), 1),
+        })
+    out.sort(key=lambda r: -r["risk_score"])
+    return out
+
+
+def snapshot_diff(
+    current_rows: Iterable[dict], previous_rows: Iterable[dict],
+    *, today: Optional[date] = None,
+) -> dict:
+    """Compute meaningful changes between two normalized row sets.
+
+    Both inputs should already have run through normalize_row (caller
+    handles the rotation: we just need rows in dict form keyed by mid).
+
+    Returns a structured "change report":
+
+        {
+          "summary": {
+              "current_total": int, "previous_total": int,
+              "current_paid": int, "previous_paid": int,
+              "mrr_now": float, "mrr_prev": float, "mrr_delta": float,
+              "new_installs": int, "new_uninstalls": int,
+              "new_payers": int, "newly_churned": int,
+              "plan_upgrades": int, "plan_downgrades": int,
+          },
+          "new_payer_rows": [up to 50 most-significant new payer dicts],
+          "newly_churned_rows": [up to 50 newly-churned dicts],
+          "plan_change_rows": [up to 50 plan-changes with from/to],
+          "newly_uninstalled_rows": [up to 50 newly-uninstalled dicts],
+        }
+    """
+    today = today or date.today()
+    cur_by_mid = {r.get("mid"): r for r in (current_rows or []) if r.get("mid")}
+    prev_by_mid = {r.get("mid"): r for r in (previous_rows or []) if r.get("mid")}
+
+    current_total = len(cur_by_mid)
+    previous_total = len(prev_by_mid)
+
+    def _is_paid(r: dict) -> bool:
+        return (
+            (r.get("installation_status") or "").lower() == "install"
+            and (r.get("purchase_status") or "") == "Purchased"
+        )
+
+    cur_paid = sum(1 for r in cur_by_mid.values() if _is_paid(r))
+    prev_paid = sum(1 for r in prev_by_mid.values() if _is_paid(r))
+
+    def _mrr(r: dict) -> float:
+        return r.get("_mrr_usd") or 0.0
+
+    mrr_now = sum(_mrr(r) for r in cur_by_mid.values() if _is_paid(r))
+    mrr_prev = sum(_mrr(r) for r in prev_by_mid.values() if _is_paid(r))
+
+    new_installs = 0
+    new_uninstalls = 0
+    new_payers: list[dict] = []
+    newly_churned: list[dict] = []
+    plan_changes: list[dict] = []
+    newly_uninstalled: list[dict] = []
+
+    # Iterate every mid we've ever seen — current ∪ previous.
+    every_mid = set(cur_by_mid) | set(prev_by_mid)
+    for mid in every_mid:
+        cur = cur_by_mid.get(mid)
+        prev = prev_by_mid.get(mid)
+
+        if cur and not prev:
+            # Brand-new seller record.
+            if (cur.get("installation_status") or "").lower() == "install":
+                new_installs += 1
+            if _is_paid(cur):
+                new_payers.append({
+                    "mid": mid,
+                    "email": cur.get("email"),
+                    "shop_url": cur.get("shop_url"),
+                    "plan": cur.get("current_subscribed_plan") or "—",
+                    "mrr": cur.get("_mrr_usd") or 0,
+                    "country": cur.get("country") or "—",
+                })
+            continue
+
+        if prev and not cur:
+            # Disappeared from the snapshot — uncommon, treat as
+            # disappearance (panel-side data churn). Skip silently.
+            continue
+
+        # Seller in both snapshots — look for transitions.
+        prev_install = (prev.get("installation_status") or "").lower()
+        cur_install = (cur.get("installation_status") or "").lower()
+        prev_status = prev.get("purchase_status") or ""
+        cur_status = cur.get("purchase_status") or ""
+        prev_plan = (prev.get("current_subscribed_plan") or "").strip()
+        cur_plan = (cur.get("current_subscribed_plan") or "").strip()
+        prev_mrr = prev.get("_mrr_usd") or 0
+        cur_mrr = cur.get("_mrr_usd") or 0
+
+        if prev_install != "install" and cur_install == "install":
+            new_installs += 1
+        elif prev_install == "install" and cur_install != "install":
+            new_uninstalls += 1
+            newly_uninstalled.append({
+                "mid": mid,
+                "email": cur.get("email"),
+                "shop_url": cur.get("shop_url"),
+                "previous_plan": prev_plan or "—",
+                "previous_mrr": prev_mrr,
+                "country": cur.get("country") or "—",
+            })
+
+        # Status transitions onto Purchased = new payer.
+        if prev_status != "Purchased" and cur_status == "Purchased":
+            new_payers.append({
+                "mid": mid,
+                "email": cur.get("email"),
+                "shop_url": cur.get("shop_url"),
+                "plan": cur_plan or "—",
+                "mrr": cur_mrr,
+                "country": cur.get("country") or "—",
+            })
+        # Off Purchased = newly churned.
+        if prev_status == "Purchased" and cur_status != "Purchased":
+            newly_churned.append({
+                "mid": mid,
+                "email": cur.get("email"),
+                "shop_url": cur.get("shop_url"),
+                "previous_plan": prev_plan or "—",
+                "new_status": cur_status or "(unset)",
+                "previous_mrr": prev_mrr,
+                "country": cur.get("country") or "—",
+            })
+
+        # Plan changes WITHIN Purchased.
+        if (
+            prev_status == "Purchased" and cur_status == "Purchased"
+            and prev_plan and cur_plan and prev_plan != cur_plan
+        ):
+            plan_changes.append({
+                "mid": mid,
+                "email": cur.get("email"),
+                "from_plan": prev_plan[:40],
+                "to_plan": cur_plan[:40],
+                "previous_mrr": prev_mrr,
+                "new_mrr": cur_mrr,
+                "delta": round(cur_mrr - prev_mrr, 2),
+            })
+
+    plan_upgrades = sum(1 for c in plan_changes if (c.get("delta") or 0) > 0)
+    plan_downgrades = sum(1 for c in plan_changes if (c.get("delta") or 0) < 0)
+
+    new_payers.sort(key=lambda r: -(r.get("mrr") or 0))
+    newly_churned.sort(key=lambda r: -(r.get("previous_mrr") or 0))
+    plan_changes.sort(key=lambda r: -abs(r.get("delta") or 0))
+    newly_uninstalled.sort(key=lambda r: -(r.get("previous_mrr") or 0))
+
+    return {
+        "summary": {
+            "current_total": current_total,
+            "previous_total": previous_total,
+            "current_paid": cur_paid,
+            "previous_paid": prev_paid,
+            "mrr_now": round(mrr_now, 2),
+            "mrr_prev": round(mrr_prev, 2),
+            "mrr_delta": round(mrr_now - mrr_prev, 2),
+            "new_installs": new_installs,
+            "new_uninstalls": new_uninstalls,
+            "new_payers": len(new_payers),
+            "newly_churned": len(newly_churned),
+            "plan_upgrades": plan_upgrades,
+            "plan_downgrades": plan_downgrades,
+        },
+        "new_payer_rows": new_payers[:50],
+        "newly_churned_rows": newly_churned[:50],
+        "plan_change_rows": plan_changes[:50],
+        "newly_uninstalled_rows": newly_uninstalled[:50],
+    }
+
+
 def renewal_forecast(
     normalized_rows: Iterable[dict], *, today: Optional[date] = None,
 ) -> dict:
