@@ -17,16 +17,29 @@
 --
 -- Idempotent: re-runnable.
 
-create table if not exists public.auth_users (
-    email           text primary key,
-    password_hash   text not null,
-    display_name    text not null default '',
-    status          text not null default 'pending'
-                       check (status in ('pending', 'approved', 'denied')),
-    requested_at    timestamptz not null default now(),
-    approved_at     timestamptz,
-    approved_by     text,
-    last_login_at   timestamptz
+CREATE TABLE IF NOT EXISTS public.auth_users (
+  email TEXT PRIMARY KEY,
+  password_hash TEXT NOT NULL,
+  display_name TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'pending',
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  approved_at TIMESTAMPTZ,
+  approved_by TEXT,
+  last_login_at TIMESTAMPTZ
 );
 
-create index if not exists auth_users_status_idx on public.auth_users (status);
+-- The CHECK lives in its own ALTER so the file stays paste-friendly in
+-- Supabase's SQL Editor (multi-line inline CHECK confused the parser
+-- on first run — see commit 36f59ab for the fix).
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'auth_users_status_check'
+  ) THEN
+    ALTER TABLE public.auth_users
+      ADD CONSTRAINT auth_users_status_check
+      CHECK (status IN ('pending', 'approved', 'denied'));
+  END IF;
+END$$;
+
+CREATE INDEX IF NOT EXISTS auth_users_status_idx ON public.auth_users (status);
