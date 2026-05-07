@@ -14,37 +14,19 @@ httpx[socks]>=0.27.0
 # backs the Install Trend / Installs-vs-Uninstalls / stacked-bar charts
 # introduced in the Apr 2026 redesign (see project_chap_dashboard_redesign
 # memory note).
-#
-# Bumped to 1.42+ for native st.login() (Google OIDC) used by auth.py.
-# See MULTI_APP_DESIGN.md §3.3 for the [auth] secrets block.
 streamlit>=1.42.0,<2.0.0
-# Authlib is NOT a transitive dep of streamlit — st.login() raises
-# StreamlitAuthError at runtime when it's missing. Must be pinned here
-# so the Streamlit Cloud build installs it alongside streamlit itself.
-#
-# Pinned to <1.7 because authlib 1.7.0 tightened OAuth state validation
-# in a way that breaks Streamlit ≤1.57's internal callback handler at
-# starlette_auth_routes._auth_callback → authorize_access_token →
-# _format_state_params, raising MismatchingStateError on every sign-in
-# even with a valid cookie_secret. Re-evaluate when Streamlit ships an
-# auth handler compatible with authlib 1.7+.
-Authlib>=1.3.2,<1.7
 plotly>=5.20.0,<7.0.0
 
 # Multi-app + RBAC (Apr 2026).
 # - pyyaml: reads apps.yaml / roles.yaml
 # - pynacl: libsodium-encrypts the CREDS secret before PUTting it via
 #   the GitHub REST API from the admin UI
-# - requests: GitHub REST API calls from admin UI + streamlit-oauth
-#   fallback. Already pulled in transitively by other deps but pinned
-#   here so admin_ui / github_secret_updater don't break silently.
-# - streamlit-oauth: fallback OAuth path for when native st.login()
-#   isn't available (e.g. self-hosted Streamlit below 1.42). Harmless
-#   if unused.
+# - requests: GitHub REST API calls from admin UI. Already pulled in
+#   transitively by other deps but pinned here so admin_ui /
+#   github_secret_updater don't break silently.
 pyyaml>=6.0,<7.0
 pynacl>=1.5.0,<2.0.0
 requests>=2.31.0,<3.0.0
-streamlit-oauth>=0.1.14,<1.0.0
 
 # Customer Intelligence — Claude-based seller-website analysis.
 # seller_profile_enricher.py calls claude-haiku-4-5 to classify

@@ -387,6 +387,107 @@ class SupabaseClient:
             ],
         )
 
+    # ---- auth_users (sql/004) -------------------------------------------
+    # Email/password auth with admin approval. See sql/004_auth_users.sql
+    # for the table shape. All methods short-circuit in dry-run.
+
+    def get_auth_user(self, email: str) -> dict | None:
+        if self._dry_run or self._client is None:
+            return None
+        try:
+            resp = (
+                self._client.table("auth_users")
+                .select("*")
+                .eq("email", email.lower())
+                .limit(1)
+                .execute()
+            )
+            data = list(getattr(resp, "data", None) or [])
+            return data[0] if data else None
+        except Exception as err:
+            logging.error(f"get_auth_user({email}) failed: {err}")
+            return None
+
+    def create_auth_user(
+        self,
+        *,
+        email: str,
+        password_hash: str,
+        display_name: str = "",
+        status: str = "pending",
+        approved_by: str | None = None,
+    ) -> bool:
+        """Insert a new auth_users row. Returns True on success."""
+        if self._dry_run or self._client is None:
+            logging.info(f"🧪 [dry-run] would create auth_user {email} (status={status})")
+            return False
+        row: dict[str, Any] = {
+            "email": email.lower(),
+            "password_hash": password_hash,
+            "display_name": display_name or "",
+            "status": status,
+        }
+        if status == "approved":
+            row["approved_at"] = datetime.now(timezone.utc).isoformat()
+            if approved_by:
+                row["approved_by"] = approved_by
+        try:
+            resp = self._client.table("auth_users").insert(row).execute()
+            return bool(getattr(resp, "data", None))
+        except Exception as err:
+            logging.error(f"create_auth_user({email}) failed: {err}")
+            return False
+
+    def list_auth_users(self, *, status: str | None = None) -> list[dict]:
+        if self._dry_run or self._client is None:
+            return []
+        try:
+            q = self._client.table("auth_users").select("*").order("requested_at", desc=True)
+            if status:
+                q = q.eq("status", status)
+            resp = q.execute()
+            return list(getattr(resp, "data", None) or [])
+        except Exception as err:
+            logging.error(f"list_auth_users(status={status}) failed: {err}")
+            return []
+
+    def update_auth_user_status(
+        self,
+        email: str,
+        *,
+        status: str,
+        approved_by: str | None = None,
+    ) -> bool:
+        if self._dry_run or self._client is None:
+            logging.info(f"🧪 [dry-run] would set {email} → status={status}")
+            return False
+        patch: dict[str, Any] = {"status": status}
+        if status == "approved":
+            patch["approved_at"] = datetime.now(timezone.utc).isoformat()
+            if approved_by:
+                patch["approved_by"] = approved_by
+        try:
+            resp = (
+                self._client.table("auth_users")
+                .update(patch)
+                .eq("email", email.lower())
+                .execute()
+            )
+            return bool(getattr(resp, "data", None))
+        except Exception as err:
+            logging.error(f"update_auth_user_status({email}) failed: {err}")
+            return False
+
+    def update_auth_user_last_login(self, email: str) -> None:
+        if self._dry_run or self._client is None:
+            return
+        try:
+            self._client.table("auth_users").update(
+                {"last_login_at": datetime.now(timezone.utc).isoformat()}
+            ).eq("email", email.lower()).execute()
+        except Exception as err:
+            logging.error(f"update_auth_user_last_login({email}) failed: {err}")
+
     # ---- utility ---------------------------------------------------------
 
     @property

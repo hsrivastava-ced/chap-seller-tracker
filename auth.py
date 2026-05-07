@@ -1,82 +1,84 @@
 """
-auth.py — Google OAuth gate for the Streamlit dashboard.
+auth.py — email/password gate for the cHAP Seller Tracker.
 
-What it does:
-    1. Forces a Google login before anything else renders.
-    2. Verifies the signed-in email is on @threecolts.com.
-    3. Looks up the user's role in roles.yaml and stashes a UserPrincipal
-       in st.session_state so the rest of the app (dashboard.py, admin_ui.py)
-       can branch on permissions without re-reading YAML every page.
+Replaces the Google OAuth flow that kept fighting Streamlit Cloud
+(`/oauth2callback` handler crashes, Authlib 1.7 state breakage, popup
+polling never matching, etc.). This is fully self-hosted: Supabase
+holds the user list, the admin (Hrithik) approves new sign-ups from
+the Admin panel, and SMTP fires off the "request received / approved /
+denied" notification emails.
 
-How sign-in works (same-window redirect, no popup):
-    - Login page renders an `<a href=…>` link to Google's authorize URL.
-    - User clicks → browser navigates to Google → consent → Google
-      redirects the same window back to `redirect_uri` with `?code=…&state=…`.
-    - On that load, gate() detects the query params, verifies the state
-      HMAC, exchanges the code for a token, fetches userinfo, and stores
-      the token in session_state. Query params are cleared and the app
-      reruns clean.
+Flow at a glance:
 
-Why not native st.login("google"):
-    Streamlit's native handler at /oauth2callback validates state against
-    a process-local cache that doesn't survive Streamlit Cloud's frequent
-    worker restarts — this manifested as MismatchingStateError on every
-    sign-in. Doing the OAuth round-trip in our own code (with HMAC-signed
-    state) sidesteps the issue.
+    First-time user:
+      1. Hits the app, sees Sign in / Request access tabs.
+      2. Picks "Request access", enters @threecolts.com email + name +
+         password they'll remember.
+      3. Row inserted into auth_users with status='pending'. Admin
+         email goes out automatically (if SMTP is configured).
+      4. User sees "Request submitted — you'll get an email when
+         it's approved."
 
-Why not streamlit-oauth's popup flow:
-    Streamlit auto-registers a handler at `/oauth2callback` whenever
-    Authlib is installed. If the OAuth `redirect_uri` is set to that
-    path, the popup hits Streamlit's native handler instead of our code,
-    which silently redirects to base — the popup-poll never sees a
-    matching URL and the popup just sits there showing the login page
-    again. The same-window flow doesn't care which path is used (as
-    long as it's NOT `/oauth2callback`).
+    Admin:
+      5. Opens Admin → Access tab, sees the pending request.
+      6. Clicks Approve. status flips to 'approved', user gets the
+         "your access is approved" email.
 
-Required setup (do BOTH steps, once):
+    Returning user:
+      7. Comes back, enters email + password, lands on the dashboard.
+      8. Role is resolved via roles.yaml (existing logic — no change).
 
-    [1] In Streamlit Cloud → app → Settings → Secrets:
+Hard-coded super admin (hsrivastava@threecolts.com) auto-approves on
+first sign-up, so the system bootstraps without needing someone else
+to flip a Supabase row.
 
-        [auth]
-        redirect_uri = "https://chap-seller-tracker.streamlit.app/"
-        # cookie_secret used to HMAC-sign the OAuth state token.
-        # Generate with: python -c 'import secrets; print(secrets.token_urlsafe(48))'
-        cookie_secret = "<32+ random bytes>"
+Required setup:
 
-        [auth.google]
-        client_id     = "<from Google Cloud console>"
-        client_secret = "<from Google Cloud console>"
+    [1] Run sql/004_auth_users.sql in Supabase (one-time).
 
-    [2] In Google Cloud Console → APIs & Services → Credentials → OAuth
-        client → Authorized redirect URIs, add (or change to):
+    [2] Streamlit Cloud → app → Settings → Secrets:
 
-            https://chap-seller-tracker.streamlit.app/
+        # SMTP for notification emails (Gmail App Password recommended).
+        # If omitted, login still works but emails won't fire.
+        [smtp]
+        host        = "smtp.gmail.com"
+        port        = 465
+        username    = "hsrivastava@threecolts.com"
+        password    = "<Gmail App Password>"
+        from_addr   = "hsrivastava@threecolts.com"
+        admin_email = "hsrivastava@threecolts.com"
 
-        The trailing slash matters — it must match `redirect_uri` exactly.
-        DO NOT use `/oauth2callback` — Streamlit's native handler will
-        intercept it and break the flow.
+    [3] Supabase URL/key are already in secrets via SUPABASE_URL /
+        SUPABASE_KEY env vars (config.py reads them).
 
-Local dev (without real Google creds):
+    Old [auth] / [auth.google] blocks from the Google OAuth era can
+    be deleted from secrets — no longer used.
+
+Local dev (without real Supabase creds):
     Set AUTH_DEV_EMAIL=hsrivastava@threecolts.com in .env. The gate
-    accepts that identity without doing OAuth. Only active when no
-    [auth] secrets are configured AND we're not on Streamlit Cloud.
+    accepts that identity without checking Supabase. Production never
+    takes this branch (Supabase URL is always set in Streamlit Cloud).
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import hmac
+import logging
 import os
+import re
 import secrets as pysecrets
 from typing import Optional
-from urllib.parse import urlencode
 
 import roles
 from roles import UserPrincipal
 
 
-GOOGLE_AUTHORIZE_URL = "https://accounts.google.com/o/oauth2/v2/auth"
-GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token"
-GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
+_LOGGER = logging.getLogger(__name__)
+
+PBKDF2_ITERATIONS = 600_000
+EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
+MIN_PASSWORD_LEN = 8
 
 
 # --------------------------------------------------------------------
@@ -85,9 +87,9 @@ GOOGLE_USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
 def gate() -> UserPrincipal:
     """Force login and return the resolved principal.
 
-    On failure (not signed in, wrong domain) this calls `st.stop()` so
-    the caller never renders. Callers MUST NOT call set_page_config
-    before this — the login screen calls it itself.
+    On failure (not signed in, wrong domain, account not approved)
+    calls `st.stop()`. Callers MUST NOT call set_page_config before
+    this — the login screen calls it itself.
     """
     import streamlit as st  # heavy; not needed in tests
 
@@ -95,29 +97,17 @@ def gate() -> UserPrincipal:
     if principal:
         return principal
 
-    # Did Google just redirect back to us? Handle the callback first
-    # (consumes ?code=…&state=… from the URL and stashes a token).
-    email = _try_consume_oauth_callback(st)
-
-    if not email:
-        email = _email_from_cached_token(st)
-
-    if not email and _is_local_dev(st):
-        dev = os.getenv("AUTH_DEV_EMAIL", "").strip()
+    # Local-dev escape hatch: AUTH_DEV_EMAIL bypasses Supabase.
+    if _is_local_dev(st):
+        dev = os.getenv("AUTH_DEV_EMAIL", "").strip().lower()
         if dev:
-            email = dev
+            principal = roles.principal_for(dev)
+            if principal:
+                st.session_state["_principal"] = principal
+                return principal
 
-    if not email:
-        _render_login_page(st)
-        st.stop()
-
-    principal = roles.principal_for(email)
-    if principal is None:
-        _render_domain_reject(st, email)
-        st.stop()
-
-    st.session_state["_principal"] = principal
-    return principal
+    _render_auth_page(st)
+    st.stop()
 
 
 def require(action: str, principal: Optional[UserPrincipal] = None) -> UserPrincipal:
@@ -147,274 +137,261 @@ def sign_out_button(st=None, *, skip_caption: bool = False):
 
 
 # --------------------------------------------------------------------
-# OAuth callback handling
+# Password hashing — pbkdf2_sha256, stdlib only.
+# Format: pbkdf2_sha256$<iters>$<salt_b64>$<hash_b64>
 # --------------------------------------------------------------------
-def _try_consume_oauth_callback(st) -> Optional[str]:
-    """If the URL has ?code=…&state=…, complete the OAuth round trip.
-
-    Returns the user's email on success, None otherwise. Always clears
-    OAuth params from the URL on exit so refreshes don't loop.
-    """
-    qp = st.query_params
-    code = qp.get("code")
-    state = qp.get("state")
-    if not code:
-        return None
-
-    # Streamlit's query_params returns either a single string or a list
-    # depending on version; normalize to scalar.
-    if isinstance(code, list):
-        code = code[0] if code else None
-    if isinstance(state, list):
-        state = state[0] if state else None
-
-    cfg = _auth_config(st)
-    if not cfg:
-        # No config — clear params and bail.
-        _clear_oauth_params(st)
-        return None
-
-    # Verify state (HMAC signed). If cookie_secret isn't configured we
-    # accept any state — internal-tool, low CSRF risk, and we'd rather
-    # have a working login than a perfect one.
-    secret = cfg.get("cookie_secret")
-    if secret and not _verify_state(state or "", secret):
-        st.warning("OAuth state mismatch — please sign in again.")
-        _clear_oauth_params(st)
-        return None
-
-    token = _exchange_code_for_token(
-        client_id=cfg["client_id"],
-        client_secret=cfg["client_secret"],
-        code=code,
-        redirect_uri=cfg["redirect_uri"],
+def hash_password(password: str, *, iterations: int = PBKDF2_ITERATIONS) -> str:
+    salt = pysecrets.token_bytes(16)
+    derived = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return (
+        f"pbkdf2_sha256${iterations}${_b64(salt)}${_b64(derived)}"
     )
-    if not token:
-        st.error("Couldn't exchange the OAuth code for a token. Try again.")
-        _clear_oauth_params(st)
-        return None
-
-    st.session_state["_oauth_token"] = token
-    _clear_oauth_params(st)
-    return _email_from_token(token)
 
 
-def _clear_oauth_params(st) -> None:
-    """Strip ?code/?state/?error/?scope/?authuser/?prompt from the URL."""
-    try:
-        for k in ("code", "state", "error", "error_description", "scope", "authuser", "prompt", "hd"):
-            if k in st.query_params:
-                del st.query_params[k]
-    except Exception:
-        pass
-
-
-def _exchange_code_for_token(
-    *, client_id: str, client_secret: str, code: str, redirect_uri: str
-) -> Optional[dict]:
-    import requests
-    try:
-        r = requests.post(
-            GOOGLE_TOKEN_URL,
-            data={
-                "client_id": client_id,
-                "client_secret": client_secret,
-                "code": code,
-                "grant_type": "authorization_code",
-                "redirect_uri": redirect_uri,
-            },
-            timeout=10,
-        )
-        if r.status_code != 200:
-            return None
-        return r.json() or None
-    except Exception:
-        return None
-
-
-def _email_from_cached_token(st) -> Optional[str]:
-    """If a token is already in session, exchange it for the user's email.
-
-    On failure (expired/revoked token) we clear it so the user falls
-    through to the login page instead of looping on a dead session.
-    """
-    token = st.session_state.get("_oauth_token")
-    if not token:
-        return None
-    email = _email_from_token(token)
-    if not email:
-        st.session_state.pop("_oauth_token", None)
-    return email
-
-
-def _email_from_token(token: dict) -> Optional[str]:
-    import requests
-    access = (token or {}).get("access_token")
-    if not access:
-        return None
-    try:
-        r = requests.get(
-            GOOGLE_USERINFO_URL,
-            headers={"Authorization": f"Bearer {access}"},
-            timeout=8,
-        )
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        email = (data.get("email") or "").strip()
-        if email and data.get("email_verified"):
-            return email
-    except Exception:
-        return None
-    return None
-
-
-# --------------------------------------------------------------------
-# HMAC-signed state — survives Streamlit Cloud worker restarts
-# (unlike session_state or auth_cache).
-# --------------------------------------------------------------------
-def _make_state(secret: str) -> str:
-    nonce = pysecrets.token_urlsafe(16)
-    sig = hmac.new(secret.encode("utf-8"), nonce.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
-    return f"{nonce}.{sig}"
-
-
-def _verify_state(state: str, secret: str) -> bool:
-    if not state or "." not in state:
+def verify_password(password: str, stored: str) -> bool:
+    if not stored or not stored.startswith("pbkdf2_sha256$"):
         return False
-    nonce, sig = state.rsplit(".", 1)
-    expected = hmac.new(secret.encode("utf-8"), nonce.encode("utf-8"), hashlib.sha256).hexdigest()[:16]
-    return hmac.compare_digest(sig, expected)
+    try:
+        _, iters_s, salt_b64, hash_b64 = stored.split("$")
+        iterations = int(iters_s)
+        salt = _b64d(salt_b64)
+        expected = _b64d(hash_b64)
+    except Exception:
+        return False
+    derived = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
+    return hmac.compare_digest(derived, expected)
+
+
+def _b64(b: bytes) -> str:
+    return base64.urlsafe_b64encode(b).decode("ascii").rstrip("=")
+
+
+def _b64d(s: str) -> bytes:
+    pad = "=" * (-len(s) % 4)
+    return base64.urlsafe_b64decode(s + pad)
 
 
 # --------------------------------------------------------------------
-# Config / env detection
+# Login / signup page rendering
 # --------------------------------------------------------------------
-def _auth_config(st) -> Optional[dict]:
-    """Return a flattened auth config dict or None if not configured.
+def _render_auth_page(st) -> None:
+    st.set_page_config(
+        page_title="Sign in — cHAP Seller Tracker",
+        page_icon=":lock:",
+        layout="centered",
+    )
+    st.markdown("# cHAP Seller Tracker")
+    st.caption("Internal sales/admin dashboard for the cHAP seller fleet.")
 
-    Accepts either:
+    # Show the post-signup confirmation if it's queued in session.
+    pending_msg = st.session_state.pop("_signup_pending_msg", None)
+    if pending_msg:
+        st.success(pending_msg)
 
-        [auth]                              [auth]
-        client_id = "..."                   redirect_uri = "..."
-        client_secret = "..."        OR     cookie_secret = "..."
-        redirect_uri = "..."
-                                            [auth.google]
-                                            client_id = "..."
-                                            client_secret = "..."
-    """
+    tab_login, tab_signup = st.tabs(["Sign in", "Request access"])
+
+    with tab_login:
+        _render_login_form(st)
+
+    with tab_signup:
+        _render_signup_form(st)
+
+
+def _render_login_form(st) -> None:
+    with st.form("login_form", clear_on_submit=False):
+        email = st.text_input("Email", placeholder="you@threecolts.com").strip().lower()
+        password = st.text_input("Password", type="password")
+        submit = st.form_submit_button("Sign in", type="primary", use_container_width=True)
+
+    if not submit:
+        return
+
+    if not email or not password:
+        st.error("Email and password are both required.")
+        return
+    if not EMAIL_RE.match(email):
+        st.error("That doesn't look like a valid email.")
+        return
+
+    user = _supabase_get_user(email)
+    if not user:
+        st.error("No account with that email. Use the **Request access** tab to sign up.")
+        return
+
+    status = (user.get("status") or "pending").lower()
+    if status == "pending":
+        st.warning("Your request is still pending admin approval. You'll get an email when it's approved.")
+        return
+    if status == "denied":
+        st.error("This account has been denied access. Contact the admin if you think that's a mistake.")
+        return
+
+    if not verify_password(password, user.get("password_hash") or ""):
+        st.error("Wrong password. Try again.")
+        return
+
+    # Authenticated. Resolve role via roles.yaml (existing logic).
+    principal = roles.principal_for(email)
+    if principal is None:
+        # Shouldn't happen — signup enforces @threecolts.com — but
+        # handle gracefully if roles.yaml gets out of sync.
+        st.error(
+            f"`{email}` is signed in but isn't on the allowed "
+            f"`@{roles.ALLOWED_DOMAIN}` domain."
+        )
+        return
+
+    st.session_state["_principal"] = principal
+    _supabase_update_last_login(email)
+    st.rerun()
+
+
+def _render_signup_form(st) -> None:
+    st.caption(
+        f"New here? Request access with your **@{roles.ALLOWED_DOMAIN}** email. "
+        f"The admin (Hrithik) will be notified and you'll get an email when "
+        f"your request is approved."
+    )
+    with st.form("signup_form", clear_on_submit=False):
+        email = st.text_input("Email", placeholder=f"you@{roles.ALLOWED_DOMAIN}").strip().lower()
+        display_name = st.text_input("Your name", placeholder="First Last").strip()
+        password = st.text_input(
+            "Password",
+            type="password",
+            help=f"At least {MIN_PASSWORD_LEN} characters. You'll use this every time you sign in.",
+        )
+        confirm = st.text_input("Confirm password", type="password")
+        submit = st.form_submit_button("Request access", type="primary", use_container_width=True)
+
+    if not submit:
+        return
+
+    if not email or not display_name or not password:
+        st.error("All fields are required.")
+        return
+    if not EMAIL_RE.match(email):
+        st.error("That doesn't look like a valid email.")
+        return
+    if not email.endswith(f"@{roles.ALLOWED_DOMAIN}"):
+        st.error(f"Only @{roles.ALLOWED_DOMAIN} email addresses are accepted.")
+        return
+    if len(password) < MIN_PASSWORD_LEN:
+        st.error(f"Password must be at least {MIN_PASSWORD_LEN} characters.")
+        return
+    if password != confirm:
+        st.error("Passwords don't match.")
+        return
+
+    existing = _supabase_get_user(email)
+    if existing:
+        status = (existing.get("status") or "pending").lower()
+        if status == "approved":
+            st.error("There's already an account with this email — sign in on the other tab.")
+        elif status == "pending":
+            st.warning("There's already a pending request for this email. Wait for admin approval.")
+        else:
+            st.error("This account has been denied access. Contact the admin.")
+        return
+
+    # Hard-coded super admin auto-approves on signup so the system
+    # bootstraps cleanly. See roles.HARD_CODED_SUPER_ADMINS.
+    auto_approved = email in {a.lower() for a in roles.HARD_CODED_SUPER_ADMINS}
+    initial_status = "approved" if auto_approved else "pending"
+    approver = email if auto_approved else None
+
+    ok = _supabase_create_user(
+        email=email,
+        password_hash=hash_password(password),
+        display_name=display_name,
+        status=initial_status,
+        approved_by=approver,
+    )
+    if not ok:
+        st.error(
+            "Couldn't save your request — Supabase rejected the insert. "
+            "Try again in a minute, or contact the admin."
+        )
+        return
+
+    if auto_approved:
+        st.session_state["_signup_pending_msg"] = (
+            "Account created and auto-approved (super admin). Sign in on the **Sign in** tab."
+        )
+    else:
+        _safe_notify_admin(requester_email=email, requester_name=display_name)
+        st.session_state["_signup_pending_msg"] = (
+            f"Request submitted for **{email}**. The admin (Hrithik) will be "
+            f"notified by email; you'll hear back as soon as it's approved."
+        )
+    st.rerun()
+
+
+# --------------------------------------------------------------------
+# Supabase + email helpers (lazy imports so tests don't need them)
+# --------------------------------------------------------------------
+def _supabase_client():
     try:
-        auth = dict(st.secrets.get("auth", {}))
-    except Exception:
+        from supabase_client import SupabaseClient
+        return SupabaseClient()
+    except Exception as err:
+        _LOGGER.error("auth: failed to construct SupabaseClient: %s", err)
         return None
-    google = {}
+
+
+def _supabase_get_user(email: str) -> Optional[dict]:
+    client = _supabase_client()
+    if client is None:
+        return None
+    return client.get_auth_user(email)
+
+
+def _supabase_create_user(
+    *,
+    email: str,
+    password_hash: str,
+    display_name: str,
+    status: str,
+    approved_by: Optional[str],
+) -> bool:
+    client = _supabase_client()
+    if client is None:
+        return False
+    return client.create_auth_user(
+        email=email,
+        password_hash=password_hash,
+        display_name=display_name,
+        status=status,
+        approved_by=approved_by,
+    )
+
+
+def _supabase_update_last_login(email: str) -> None:
+    client = _supabase_client()
+    if client is None:
+        return
+    client.update_auth_user_last_login(email)
+
+
+def _safe_notify_admin(*, requester_email: str, requester_name: str) -> None:
     try:
-        google = dict(auth.get("google", {}) or {})
-    except Exception:
-        google = {}
-    cfg = {**auth, **google}  # google sub-table wins for client_id/secret
-    needed = {"client_id", "client_secret", "redirect_uri"}
-    if not needed.issubset(cfg.keys()):
-        return None
-    return cfg
+        from email_notifications import notify_admin_new_signup
+        notify_admin_new_signup(requester_email=requester_email, requester_name=requester_name)
+    except Exception as err:
+        _LOGGER.warning("notify_admin_new_signup failed: %s", err)
 
 
+# --------------------------------------------------------------------
+# Misc
+# --------------------------------------------------------------------
 def _is_local_dev(st) -> bool:
-    if _auth_config(st):
+    """No Supabase creds AND not on Streamlit Cloud."""
+    if os.getenv("SUPABASE_URL") and os.getenv("SUPABASE_KEY"):
         return False
     if os.getenv("STREAMLIT_SHARING_MODE"):
         return False
     return True
 
 
-# --------------------------------------------------------------------
-# Login page rendering
-# --------------------------------------------------------------------
-def _render_login_page(st) -> None:
-    st.set_page_config(
-        page_title="Sign in — cHAP Seller Tracker",
-        page_icon=":lock:",
-        layout="centered",
-    )
-    st.markdown(
-        """
-        # cHAP Seller Tracker
-
-        Sign in with your **@threecolts.com** Google account to continue.
-        """
-    )
-
-    cfg = _auth_config(st)
-    if not cfg:
-        if _is_local_dev(st) and not os.getenv("AUTH_DEV_EMAIL"):
-            st.info(
-                "Local dev: set `AUTH_DEV_EMAIL=you@threecolts.com` in `.env` "
-                "to skip the OAuth dance while developing."
-            )
-        else:
-            st.error(
-                "OAuth is not configured. The `[auth]` block is missing from "
-                "Streamlit secrets. See `auth.py` docstring for the expected shape."
-            )
-        return
-
-    redirect_uri = cfg["redirect_uri"]
-    if redirect_uri.rstrip("/").endswith("/oauth2callback"):
-        st.error(
-            "**OAuth misconfigured.** `redirect_uri` ends with `/oauth2callback`, "
-            "which Streamlit's native auth handler intercepts. Update the redirect "
-            "URI in Streamlit secrets and Google Cloud Console to "
-            f"`{redirect_uri.rsplit('/oauth2callback', 1)[0] or '/'}/` (the app root)."
-        )
-        return
-
-    secret = cfg.get("cookie_secret") or cfg.get("client_secret", "")
-    state = _make_state(secret) if secret else pysecrets.token_urlsafe(16)
-    auth_url = _build_authorize_url(cfg["client_id"], redirect_uri, state)
-
-    st.link_button(
-        "Sign in with Google",
-        url=auth_url,
-        use_container_width=True,
-        type="primary",
-    )
-    st.caption(
-        "Only @threecolts.com identities are permitted. "
-        "If you need access, ask the admin (Hrithik)."
-    )
-
-
-def _build_authorize_url(client_id: str, redirect_uri: str, state: str) -> str:
-    params = {
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
-        "response_type": "code",
-        "scope": "openid email profile",
-        "state": state,
-        "access_type": "online",
-        "prompt": "select_account",
-        "include_granted_scopes": "true",
-    }
-    return f"{GOOGLE_AUTHORIZE_URL}?{urlencode(params)}"
-
-
-def _render_domain_reject(st, email: str) -> None:
-    st.set_page_config(
-        page_title="Access denied — cHAP Seller Tracker",
-        page_icon=":no_entry:",
-        layout="centered",
-    )
-    st.error(
-        f"The account `{email}` is signed in but is not on the allowed "
-        f"**@{roles.ALLOWED_DOMAIN}** domain. Please sign in with a "
-        f"Threecolts Google account."
-    )
-    if st.button("Try again"):
-        _do_sign_out(st)
-
-
 def _do_sign_out(st) -> None:
-    for k in ("_principal", "_oauth_token"):
-        st.session_state.pop(k, None)
-    _clear_oauth_params(st)
+    st.session_state.pop("_principal", None)
     st.rerun()

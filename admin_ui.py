@@ -162,7 +162,9 @@ def main():
     #   - Runs            — live history from GitHub Actions
     #   - Users           — super-admin only, hidden otherwise
     tab_labels = ["Overview", "Add new app", "Settings", "Runs"]
-    if roles.can(principal, "see_users_tab"):
+    show_access_tab = roles.can(principal, "see_users_tab")
+    if show_access_tab:
+        tab_labels.append("Access")
         tab_labels.append("Users")
     tabs = st.tabs(tab_labels)
 
@@ -174,8 +176,10 @@ def main():
         _render_settings_tab(principal)
     with tabs[3]:
         _render_runs_tab(principal)
-    if len(tabs) > 4:
+    if show_access_tab:
         with tabs[4]:
+            _render_access_tab(principal)
+        with tabs[5]:
             _render_users_tab(principal)
 
     # Sidebar footer: theme picker + sign out.
@@ -1005,6 +1009,85 @@ jobs:
 # =================================================================
 # Users tab (super admin only)
 # =================================================================
+def _render_access_tab(principal):
+    """Approve / deny sign-up requests stored in Supabase auth_users.
+
+    Roles still come from roles.yaml — this tab only controls whether
+    a credential pair can authenticate. Approving here lets the user
+    sign in; their role is then resolved via roles.yaml (defaulting
+    to 'viewer' for anyone not explicitly listed).
+    """
+    from supabase_client import SupabaseClient
+    from email_notifications import notify_user_approved, notify_user_denied
+
+    st.subheader("Access requests")
+    st.caption(
+        "Pending sign-ups need an admin approval before the user can log in. "
+        "Approving sends them a notification email (if SMTP is configured)."
+    )
+
+    client = SupabaseClient()
+    if client.dry_run:
+        st.warning(
+            "Supabase isn't configured — approvals can't persist. "
+            "Make sure SUPABASE_URL and SUPABASE_KEY are set in Streamlit secrets."
+        )
+        return
+
+    pending = client.list_auth_users(status="pending")
+    if not pending:
+        st.info("No pending requests right now.")
+    else:
+        st.markdown(f"**{len(pending)} pending request(s)**")
+        for u in pending:
+            email = u.get("email", "")
+            name = u.get("display_name") or "(no name)"
+            requested_at = (u.get("requested_at") or "")[:19].replace("T", " ")
+            with st.container(border=True):
+                cols = st.columns([3, 1, 1])
+                cols[0].markdown(f"**{email}**  \n{name}  \n_Requested {requested_at} UTC_")
+                if cols[1].button("Approve", key=f"approve_{email}", type="primary"):
+                    ok = client.update_auth_user_status(
+                        email, status="approved", approved_by=principal.email
+                    )
+                    if ok:
+                        notify_user_approved(user_email=email)
+                        st.success(f"Approved {email}.")
+                        st.rerun()
+                    else:
+                        st.error(f"Couldn't approve {email}.")
+                if cols[2].button("Deny", key=f"deny_{email}"):
+                    ok = client.update_auth_user_status(
+                        email, status="denied", approved_by=principal.email
+                    )
+                    if ok:
+                        notify_user_denied(user_email=email)
+                        st.success(f"Denied {email}.")
+                        st.rerun()
+                    else:
+                        st.error(f"Couldn't deny {email}.")
+
+    st.divider()
+
+    st.subheader("All accounts")
+    all_users = client.list_auth_users()
+    if not all_users:
+        st.caption("No accounts yet.")
+        return
+    rows = []
+    for u in all_users:
+        rows.append({
+            "Email": u.get("email", ""),
+            "Name": u.get("display_name") or "—",
+            "Status": (u.get("status") or "").title(),
+            "Requested": (u.get("requested_at") or "")[:19].replace("T", " "),
+            "Approved": (u.get("approved_at") or "—")[:19].replace("T", " ") if u.get("approved_at") else "—",
+            "Last login": (u.get("last_login_at") or "—")[:19].replace("T", " ") if u.get("last_login_at") else "—",
+            "Approved by": u.get("approved_by") or "—",
+        })
+    st.dataframe(rows, hide_index=True, use_container_width=True)
+
+
 def _render_users_tab(principal):
     st.subheader("Who has access")
     rows = []
