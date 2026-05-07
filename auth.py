@@ -83,16 +83,19 @@ MIN_PASSWORD_LEN = 8
 
 # Idle session timeout. Sliding window — every gate() call refreshes.
 # Streamlit Cloud workers restart frequently and wipe session_state, so
-# without a cookie-backed token here every restart bounces the user
-# back to login. Cookie persists in browser; cookie value is a JWT-like
-# `email|expires_at_unix|hmac` triple signed with `cookie_secret`.
+# without a persistence layer every restart bounces the user back to
+# login. We persist the session token in `st.query_params` (URL):
+# synchronous reads on every page load, survives reloads, no extra
+# component dependency. Token is HMAC-signed with cookie_secret so the
+# URL exposure is acceptable for an internal tool — anyone who
+# screen-shares the URL is sharing a 20-min session, not a credential.
 SESSION_TTL_SECONDS = 20 * 60         # 20 minutes
 SESSION_WARN_SECONDS = 60             # show "expires in 1 min" warning
-SESSION_REFRESH_THRESHOLD_SECONDS = 5 * 60  # only re-issue cookie when
+SESSION_REFRESH_THRESHOLD_SECONDS = 5 * 60  # only re-issue token when
                                             # < this much time remains,
-                                            # to avoid setting a cookie
-                                            # on every single rerun
-SESSION_COOKIE_NAME = "chap_session"
+                                            # to avoid changing the URL
+                                            # on every interaction
+SESSION_QUERY_PARAM = "s"
 
 
 # --------------------------------------------------------------------
@@ -121,19 +124,19 @@ def gate() -> UserPrincipal:
 
     principal = st.session_state.get("_principal")
     if principal:
-        # Even when principal is cached, keep the cookie fresh so the
-        # next reload after a worker restart restores cleanly.
-        _maybe_refresh_session_cookie(st, principal.email)
+        # Even when principal is cached, keep the URL token fresh so
+        # the next reload after a worker restart restores cleanly.
+        _maybe_refresh_url_token(st, principal.email)
         return principal
 
-    # Cookie-backed fast path: restore the principal across a Streamlit
+    # URL-token fast path: restore the principal across a Streamlit
     # Cloud worker restart without re-authenticating.
-    cookie_email = _email_from_session_cookie(st)
-    if cookie_email:
-        principal = roles.principal_for(cookie_email)
+    url_email = _email_from_url_token(st)
+    if url_email:
+        principal = roles.principal_for(url_email)
         if principal:
             st.session_state["_principal"] = principal
-            _maybe_refresh_session_cookie(st, cookie_email)
+            _maybe_refresh_url_token(st, url_email)
             return principal
 
     # Local-dev escape hatch: AUTH_DEV_EMAIL bypasses Supabase.
@@ -192,24 +195,25 @@ def sign_out_button(st=None, *, skip_caption: bool = False):
 
 
 # --------------------------------------------------------------------
-# Session cookie — HMAC-signed (email, expires_at) survives Streamlit
-# Cloud worker restarts so users don't bounce to login on every reload.
+# URL-token session — HMAC-signed (email, expires_at) survives
+# Streamlit Cloud worker restarts so users don't bounce to login on
+# every reload. Lives in `st.query_params["s"]`. Sync read, sync
+# write, no extra component dependency.
 # --------------------------------------------------------------------
 def _cookie_secret(st) -> Optional[str]:
+    """Signing key. `cookie_secret` from secrets.toml is recycled —
+    same byte-string used to sign session tokens."""
     try:
         secret = (st.secrets.get("auth", {}) or {}).get("cookie_secret")
     except Exception:
         secret = None
     if secret:
         return secret
-    # Last-resort fallback so local dev (no [auth] block) still works.
-    # Doesn't survive process restart, but session_state shouldn't
-    # either in that case so the UX is consistent.
     return os.getenv("CHAP_COOKIE_SECRET")
 
 
 def _make_session_token(email: str, secret: str, ttl: int = SESSION_TTL_SECONDS) -> str:
-    """`email|expires_at|hex_sig` — base64url-encoded as one string."""
+    """`email|expires_at|hex_sig` — base64url-encoded as one URL-safe string."""
     expires_at = int(time.time()) + ttl
     payload = f"{email.lower()}|{expires_at}"
     sig = hmac.new(
@@ -240,38 +244,31 @@ def _verify_session_token(token: str, secret: str) -> Optional[tuple[str, int]]:
     return email, expires_at
 
 
-def _cookie_manager(st):
-    """Return a memoised CookieManager, or None if the dep isn't installed."""
-    cm = st.session_state.get("_cookie_manager")
-    if cm is not None:
-        return cm
+def _read_url_token(st) -> Optional[str]:
+    """Pull the `s` query param. Streamlit returns either str or list."""
     try:
-        import extra_streamlit_components as stx
+        token = st.query_params.get(SESSION_QUERY_PARAM)
     except Exception:
         return None
-    cm = stx.CookieManager(key="chap_cookie_manager")
-    st.session_state["_cookie_manager"] = cm
-    return cm
+    if isinstance(token, list):
+        token = token[0] if token else None
+    return token or None
 
 
-def _email_from_session_cookie(st) -> Optional[str]:
-    cm = _cookie_manager(st)
+def _email_from_url_token(st) -> Optional[str]:
     secret = _cookie_secret(st)
-    if cm is None or not secret:
+    if not secret:
         return None
-    try:
-        token = cm.get(SESSION_COOKIE_NAME)
-    except Exception:
-        return None
+    token = _read_url_token(st)
     if not token:
         return None
     parsed = _verify_session_token(token, secret)
     if not parsed:
-        # Stale / forged — clear the cookie so the next gate() call
+        # Stale / forged — clear the param so the next gate() call
         # cleanly falls through to the login page instead of looping
         # on a dead token.
         try:
-            cm.delete(SESSION_COOKIE_NAME, key="chap_cookie_clear")
+            del st.query_params[SESSION_QUERY_PARAM]
         except Exception:
             pass
         return None
@@ -279,58 +276,41 @@ def _email_from_session_cookie(st) -> Optional[str]:
 
 
 def _session_seconds_remaining(st) -> Optional[int]:
-    cm = _cookie_manager(st)
     secret = _cookie_secret(st)
-    if cm is None or not secret:
+    if not secret:
         return None
-    try:
-        token = cm.get(SESSION_COOKIE_NAME)
-    except Exception:
-        return None
+    token = _read_url_token(st)
     parsed = _verify_session_token(token or "", secret)
     if not parsed:
         return None
     return parsed[1] - int(time.time())
 
 
-def _set_session_cookie(st, email: str) -> None:
-    cm = _cookie_manager(st)
+def _set_url_token(st, email: str) -> None:
     secret = _cookie_secret(st)
-    if cm is None or not secret:
+    if not secret:
         return
-    token = _make_session_token(email, secret)
     try:
-        from datetime import datetime, timezone, timedelta
-        expires = datetime.now(timezone.utc) + timedelta(seconds=SESSION_TTL_SECONDS)
-        # The CookieManager.set() signature wants a unique `key` per
-        # call so streamlit's re-run dedup doesn't collapse the write.
-        cm.set(
-            SESSION_COOKIE_NAME, token,
-            expires_at=expires,
-            key=f"chap_cookie_set_{int(time.time())}",
-        )
+        st.query_params[SESSION_QUERY_PARAM] = _make_session_token(email, secret)
     except Exception as err:
-        _LOGGER.debug(f"failed to set session cookie: {err}")
+        _LOGGER.debug(f"failed to set session URL token: {err}")
 
 
-def _maybe_refresh_session_cookie(st, email: str) -> None:
-    """Re-issue the cookie when < 5 min remain so active users stay logged
-    in indefinitely without setting a cookie on every single rerun."""
+def _maybe_refresh_url_token(st, email: str) -> None:
+    """Re-issue the URL token when < 5 min remain so active users stay
+    logged in indefinitely without rewriting the URL on every rerun."""
     secs_left = _session_seconds_remaining(st)
     if secs_left is None:
-        # No prior cookie — set one now.
-        _set_session_cookie(st, email)
+        _set_url_token(st, email)
         return
     if secs_left < SESSION_REFRESH_THRESHOLD_SECONDS:
-        _set_session_cookie(st, email)
+        _set_url_token(st, email)
 
 
-def _clear_session_cookie(st) -> None:
-    cm = _cookie_manager(st)
-    if cm is None:
-        return
+def _clear_url_token(st) -> None:
     try:
-        cm.delete(SESSION_COOKIE_NAME, key=f"chap_cookie_del_{int(time.time())}")
+        if SESSION_QUERY_PARAM in st.query_params:
+            del st.query_params[SESSION_QUERY_PARAM]
     except Exception:
         pass
 
@@ -442,7 +422,7 @@ def _render_login_form(st) -> None:
 
     st.session_state["_principal"] = principal
     _supabase_update_last_login(email)
-    _set_session_cookie(st, email)
+    _set_url_token(st, email)
     st.rerun()
 
 
@@ -596,5 +576,5 @@ def _is_local_dev(st) -> bool:
 
 def _do_sign_out(st) -> None:
     st.session_state.pop("_principal", None)
-    _clear_session_cookie(st)
+    _clear_url_token(st)
     st.rerun()
