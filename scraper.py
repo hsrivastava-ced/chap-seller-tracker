@@ -3321,21 +3321,27 @@ def main():
     except Exception as diag_err:
         logging.debug(f"validator-decision dump skipped: {diag_err}")
 
-    # Per-app promotion: an app is "blocked" if EITHER its sellers OR
-    # uninstalls report flagged blocked. Apps with clean reports get
-    # promoted to latest/ even when other apps fail. Without this an
-    # all-or-nothing block would drop the entire run into staging/ —
-    # verified live 2026-04-26: scrape captured TEMU EU (73 sellers)
-    # cleanly but a TEMU US validator block sent everything to staging,
-    # so TEMU EU never reached the dashboard.
-    blocked_app_ids: set[str] = {r.app_name for r in blocked}
+    # Per-(app, kind) promotion. Verified live 2026-05-08 on michael:
+    # sellers report was OK (254 rows, plan='Free' captured) but
+    # uninstalls report blocked (0 rows vs 29 previously = 100% drop),
+    # and the previous app-wide block sent BOTH sellers and uninstalls
+    # to staging — so the dashboard kept stale empty-plan michael data.
+    # Splitting by kind lets the good sellers data land in latest/
+    # while only the suspicious uninstalls go to staging.
+    blocked_sellers_ids: set[str] = {
+        r.app_name for r in blocked if r.kind == "sellers"
+    }
+    blocked_uninstalls_ids: set[str] = {
+        r.app_name for r in blocked if r.kind == "uninstalls"
+    }
+    blocked_app_ids: set[str] = blocked_sellers_ids | blocked_uninstalls_ids
 
     if blocked:
         logging.warning(
-            f"🛑 Validator blocked {len(blocked_app_ids)} app(s): "
-            f"{sorted(blocked_app_ids)}. Their prior latest/ snapshot "
-            f"is preserved via merge logic. Other apps' fresh data "
-            f"DOES land in latest/."
+            f"🛑 Validator blocked: {len(blocked_sellers_ids)} sellers + "
+            f"{len(blocked_uninstalls_ids)} uninstalls report(s). "
+            f"Each blocked (app, kind) keeps its prior latest/ snapshot; "
+            f"the OTHER kind for the same app still promotes if clean."
         )
         for r in blocked:
             logging.warning(f"   ↳ {r.app_name} / {r.kind}: blocked")
@@ -3345,15 +3351,14 @@ def main():
             f"Promoting anyway (soft signal only); admin UI should surface."
         )
 
-    # Filter blocked apps OUT of the latest-promotion path. Their fresh
-    # data still goes to results/staging/<stamp>/ via the writes below,
-    # so admins can audit what was captured. Merge logic in
-    # persist_results keeps their PRIOR rows visible on the dashboard.
+    # Filter blocked (app, kind) pairs OUT of the latest-promotion path.
+    # Their fresh data still goes to results/staging/<stamp>/ via the
+    # writes below for post-mortem.
     sellers_to_promote = {
-        k: v for k, v in all_sellers.items() if k not in blocked_app_ids
+        k: v for k, v in all_sellers.items() if k not in blocked_sellers_ids
     }
     uninstalls_to_promote = {
-        k: v for k, v in all_uninstalls.items() if k not in blocked_app_ids
+        k: v for k, v in all_uninstalls.items() if k not in blocked_uninstalls_ids
     }
 
     # --- Persist -----------------------------------------------------------
@@ -3391,11 +3396,13 @@ def main():
             # data to staging/<stamp>/ for post-mortem (otherwise it'd be
             # invisible since latest/ only got the good apps).
             if blocked_app_ids:
+                # Per-kind: only the BLOCKED kind goes to staging. The
+                # good kind already landed in latest/ via the call above.
                 blocked_sellers = {
-                    k: v for k, v in all_sellers.items() if k in blocked_app_ids
+                    k: v for k, v in all_sellers.items() if k in blocked_sellers_ids
                 }
                 blocked_uninstalls = {
-                    k: v for k, v in all_uninstalls.items() if k in blocked_app_ids
+                    k: v for k, v in all_uninstalls.items() if k in blocked_uninstalls_ids
                 }
                 if blocked_sellers or blocked_uninstalls:
                     persist_results(
