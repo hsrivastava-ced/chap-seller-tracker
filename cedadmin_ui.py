@@ -35,6 +35,7 @@ import streamlit as st
 import auth
 import cedadmin_analytics as ca
 import cedadmin_roles
+from ui_theme import PALETTE, apply_shared_theme
 
 
 DATA_DIR = Path("cedadmin_data/latest")
@@ -125,7 +126,8 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
-    _inject_css()
+    apply_shared_theme()  # cHAP/cedadmin share the same look + sidebar.
+    _inject_css()         # cedadmin-specific additions on top.
 
     rows, stamp = _load_walmart_us()
     if not rows:
@@ -181,27 +183,53 @@ def main() -> None:
 # CSS injection — KPI cards + freshness pill + status badges.
 # --------------------------------------------------------------------
 def _inject_css() -> None:
+    """cedadmin-specific styles on top of the shared theme.
+
+    The shared theme (ui_theme.apply_shared_theme) gives us the dark
+    sidebar + light page chrome + typography scale. We add KPI cards,
+    section headers, status pills, and the freshness pill on top.
+    """
     st.markdown(
-        """
+        f"""
         <style>
-          .freshness-pill {
-            background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
-            color: #cbd5e1;
+          /* === Freshness pill in the page header ============== */
+          .freshness-pill {{
+            background: {PALETTE["card"]};
+            color: {PALETTE["text_soft"]};
             padding: 4px 12px;
             border-radius: 999px;
             font-size: 0.75rem;
-            border: 1px solid #475569;
+            border: 1px solid {PALETTE["border"]};
             font-weight: 500;
-          }
-          .ked-kpi {
-            padding: 16px 18px;
-            border-radius: 12px;
-            border: 1px solid rgba(148, 163, 184, 0.2);
-            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
-            box-shadow: 0 1px 2px rgba(0,0,0,0.06);
-          }
-          .ked-kpi-label {
-            color: #94a3b8;
+            white-space: nowrap;
+          }}
+
+          /* === KPI cards — light, with a coloured top-stripe accent.
+                The stripe colour is set inline per card so revenue,
+                lead-tier, and lifecycle KPIs stay distinguishable. */
+          .ked-kpi {{
+            padding: 18px 20px 16px 20px;
+            border-radius: 14px;
+            border: 1px solid {PALETTE["border"]};
+            background: {PALETTE["card"]};
+            box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+            position: relative;
+            overflow: hidden;
+            transition: transform 0.15s ease, box-shadow 0.15s ease;
+          }}
+          .ked-kpi:hover {{
+            transform: translateY(-1px);
+            box-shadow: 0 6px 14px rgba(15, 23, 42, 0.08);
+          }}
+          .ked-kpi::before {{
+            content: "";
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 4px;
+            background: var(--stripe, {PALETTE["primary"]});
+          }}
+          .ked-kpi-label {{
+            color: {PALETTE["text_soft"]};
             font-size: 0.72rem;
             font-weight: 600;
             letter-spacing: 0.08em;
@@ -209,35 +237,64 @@ def _inject_css() -> None:
             display: flex;
             align-items: center;
             gap: 6px;
-          }
-          .ked-kpi-value {
+          }}
+          .ked-kpi-value {{
             font-size: 1.85rem;
             font-weight: 700;
             line-height: 1.1;
             margin-top: 6px;
             font-variant-numeric: tabular-nums;
-          }
-          .ked-kpi-sub {
-            color: #94a3b8;
+            color: {PALETTE["text"]};
+          }}
+          .ked-kpi-sub {{
+            color: {PALETTE["text_soft"]};
             font-size: 0.78rem;
             margin-top: 4px;
-          }
-          .ked-tier {
+          }}
+          .ked-info {{
+            cursor: help;
+            color: {PALETTE["text_soft"]};
+            opacity: 0.7;
+          }}
+          .ked-info:hover {{
+            opacity: 1;
+          }}
+
+          /* === Tier / status pills — colour set inline */
+          .ked-tier {{
             display: inline-block;
             padding: 2px 10px;
             border-radius: 999px;
             font-size: 0.72rem;
             font-weight: 600;
             color: white;
-          }
-          .ked-section-title {
+            letter-spacing: 0.04em;
+          }}
+
+          /* === Section header with left-bar accent ============ */
+          .ked-section {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin: 18px 0 8px 0;
+          }}
+          .ked-section-title {{
             font-size: 1.05rem;
             font-weight: 700;
-            color: #e2e8f0;
-            margin: 8px 0 4px 0;
-            border-left: 4px solid #6366f1;
+            color: {PALETTE["text"]};
+            border-left: 4px solid {PALETTE["primary"]};
             padding-left: 10px;
-          }
+          }}
+          .ked-section-sub {{
+            font-size: 0.82rem;
+            color: {PALETTE["text_soft"]};
+          }}
+
+          /* === Tab tweaks — bigger underline on active ====== */
+          button[data-baseweb="tab"] [data-testid="stMarkdownContainer"] p {{
+            font-size: 0.95rem !important;
+            font-weight: 600 !important;
+          }}
         </style>
         """,
         unsafe_allow_html=True,
@@ -246,17 +303,35 @@ def _inject_css() -> None:
 
 def _kpi(col, *, label: str, value: str, sub: str = "",
          color: str = "#22c55e", help_text: str = "") -> None:
-    """One KPI tile inside `col`. `help_text` shows on hover."""
+    """One KPI tile inside `col`. `help_text` shows on hover.
+
+    `color` drives the top-stripe accent — revenue cards green, lead-
+    tier cards red/orange/blue, lifecycle cards amber, churn neutral.
+    """
     info_icon = (
-        f' <span title="{help_text}" style="cursor:help; color:#64748b;">ⓘ</span>'
+        f' <span class="ked-info" title="{help_text}">ⓘ</span>'
         if help_text else ""
     )
     col.markdown(
-        f"""<div class="ked-kpi">
+        f"""<div class="ked-kpi" style="--stripe: {color};">
           <div class="ked-kpi-label">{label}{info_icon}</div>
-          <div class="ked-kpi-value" style="color:{color};">{value}</div>
+          <div class="ked-kpi-value">{value}</div>
           {f'<div class="ked-kpi-sub">{sub}</div>' if sub else ""}
         </div>""",
+        unsafe_allow_html=True,
+    )
+
+
+def _section(title: str, sub: str = "") -> None:
+    """Section header with a coloured accent bar + optional sub-line.
+    Avoids st.markdown('### ...') which is too heavy + lacks the
+    left-bar accent."""
+    sub_html = f'<span class="ked-section-sub">{sub}</span>' if sub else ""
+    st.markdown(
+        f'<div class="ked-section">'
+        f'<span class="ked-section-title">{title}</span>'
+        f'{sub_html}'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
@@ -351,7 +426,10 @@ def _render_dashboard_tab(rows: list[dict], today: date) -> None:
     )
 
     st.write("")
-    st.markdown('<div class="ked-section-title">Plan tier mix</div>', unsafe_allow_html=True)
+    _section(
+        "Plan tier mix",
+        sub="Currently-installed sellers on Purchased status, sliced by plan cadence.",
+    )
 
     col_pie, col_table = st.columns([3, 2])
 
@@ -374,7 +452,7 @@ def _render_dashboard_tab(rows: list[dict], today: date) -> None:
         colors = [TIER_PALETTE.get(k, TIER_PALETTE["Unknown"]) for k in labels]
         fig = go.Figure(data=[go.Pie(
             labels=labels, values=values, hole=0.55,
-            marker=dict(colors=colors, line=dict(color="#0f172a", width=2)),
+            marker=dict(colors=colors, line=dict(color=PALETTE["card"], width=2)),
             textposition="outside",
             textinfo="label+percent",
             hovertemplate="<b>%{label}</b><br>Sellers: %{value}<br>%{percent}<extra></extra>",
@@ -385,7 +463,7 @@ def _render_dashboard_tab(rows: list[dict], today: date) -> None:
             showlegend=False,
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#e2e8f0"),
+            font=dict(color=PALETTE["text"], size=12),
         )
         col_pie.plotly_chart(fig, use_container_width=True, key="dash_tier_donut")
 
@@ -426,7 +504,10 @@ def _render_dashboard_tab(rows: list[dict], today: date) -> None:
         )
 
     st.write("")
-    st.markdown('<div class="ked-section-title">Purchase status breakdown</div>', unsafe_allow_html=True)
+    _section(
+        "Purchase status breakdown",
+        sub="All sellers (installed + uninstalled) — shows the lapsed cohort sizes.",
+    )
 
     # Purchase status across ALL sellers (not just installed) so we
     # see lapsed cohorts.
@@ -448,14 +529,17 @@ def _render_dashboard_tab(rows: list[dict], today: date) -> None:
             margin=dict(t=10, b=10, l=10, r=10),
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#e2e8f0"),
+            font=dict(color=PALETTE["text"], size=12),
             xaxis=dict(showgrid=False, showticklabels=False),
             yaxis=dict(showgrid=False),
         )
         st.plotly_chart(fig, use_container_width=True, key="dash_purchase_bar")
 
     st.write("")
-    st.markdown('<div class="ked-section-title">Install vs Uninstall — last 24 months</div>', unsafe_allow_html=True)
+    _section(
+        "Install vs Uninstall — last 24 months",
+        sub="Green = new installs, red = uninstalls, dotted line = net.",
+    )
 
     series = ca.install_movement_series(rows)
     if series["months"]:
@@ -488,18 +572,21 @@ def _render_dashboard_tab(rows: list[dict], today: date) -> None:
             margin=dict(t=20, b=10, l=10, r=10),
             paper_bgcolor="rgba(0,0,0,0)",
             plot_bgcolor="rgba(0,0,0,0)",
-            font=dict(color="#e2e8f0"),
+            font=dict(color=PALETTE["text"], size=12),
             legend=dict(
                 orientation="h", yanchor="bottom", y=1.02,
                 xanchor="right", x=1,
             ),
             xaxis=dict(showgrid=False),
-            yaxis=dict(zeroline=True, zerolinecolor="#475569"),
+            yaxis=dict(zeroline=True, zerolinecolor=PALETTE["border"]),
         )
         st.plotly_chart(fig, use_container_width=True, key="dash_movement_bar")
 
     st.write("")
-    st.markdown('<div class="ked-section-title">Top 25 paying accounts (by MRR)</div>', unsafe_allow_html=True)
+    _section(
+        "Top 25 paying accounts",
+        sub="Ranked by monthly-equivalent revenue. Click a column header to sort.",
+    )
 
     paying = [
         r for r in rows
@@ -544,7 +631,10 @@ def _render_dashboard_tab(rows: list[dict], today: date) -> None:
         )
 
     st.write("")
-    st.markdown('<div class="ked-section-title">Geographic distribution (top 15)</div>', unsafe_allow_html=True)
+    _section(
+        "Geographic distribution",
+        sub="Top 15 countries by install count, with paid-conversion rate.",
+    )
 
     geo = ca.country_distribution(rows)[:15]
     if geo:
