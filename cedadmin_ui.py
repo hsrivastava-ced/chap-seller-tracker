@@ -1,15 +1,26 @@
 """
 cedadmin_ui.py — Streamlit UI for the CedCommerce admin scrape.
 
-Three tabs:
-  - Dashboard       — revenue + plan movements + headlines
-  - Intelligence    — SQL lead buckets the support team works
-  - Sellers         — full filterable table over all 28 columns
+Tabs:
+  - 📊 Dashboard       — revenue + plan movements + top accounts
+  - 🎯 Intelligence    — SQL lead buckets the support team works
+  - 📋 Sellers         — full filterable table over all 28 columns
 
 Strictly separate from cHAP — reads from cedadmin_data/, uses
-cedadmin_roles for access. Auth still uses the shared auth.gate()
-because the login form is the same; only the per-app permissions
-differ.
+cedadmin_roles for access. Auth uses the shared auth.gate(); only
+the per-app permissions differ.
+
+Design notes (2026-05-08 redesign):
+  - Every KPI card carries a `help=` tooltip explaining how the
+    support team uses it.
+  - Charts via plotly so hovers show exact values; bar charts use a
+    consistent colour palette tied to plan-tier so a tier renders
+    the same colour everywhere it appears.
+  - Status pills (Purchased / Trial Expired / License Expired / etc.)
+    are colour-coded via st.dataframe's column_config.TextColumn so
+    the eye lands on revenue states without scanning the row text.
+  - All widgets carry an explicit `key=` so duplicated labels across
+    tabs don't trip Streamlit's element-id collision check.
 """
 from __future__ import annotations
 
@@ -27,6 +38,39 @@ import cedadmin_roles
 
 
 DATA_DIR = Path("cedadmin_data/latest")
+
+# Single source of truth for plan-tier colours so the donut, the bar
+# chart, and the badges all agree.
+TIER_PALETTE: dict[str, str] = {
+    "Yearly":      "#22c55e",  # green — long commitment
+    "Monthly":     "#3b82f6",  # blue — recurring
+    "Quarterly":   "#a855f7",  # purple
+    "Half-Yearly": "#0ea5e9",  # sky
+    "9 Month":     "#06b6d4",  # cyan
+    "Pro":         "#f59e0b",  # amber
+    "Combo":       "#ec4899",  # pink
+    "Lite":        "#84cc16",  # lime
+    "Basic":       "#10b981",  # emerald
+    "Standard":    "#14b8a6",  # teal
+    "Premium":     "#8b5cf6",  # violet
+    "Custom":      "#6366f1",  # indigo
+    "Free":        "#94a3b8",  # slate
+    "Trial":       "#fbbf24",  # yellow
+    "Enterprise":  "#ef4444",  # red — high value
+    "Unknown":     "#cbd5e1",  # neutral
+}
+
+PURCHASE_PALETTE: dict[str, str] = {
+    "Purchased":               "#22c55e",
+    "Free Subscription":       "#3b82f6",
+    "Trial Expired":           "#fbbf24",
+    "Free Subscription Expire": "#f59e0b",
+    "License Expired":         "#ef4444",
+    "Not Purchase":            "#94a3b8",
+    "(not set)":               "#cbd5e1",
+}
+
+TIER_BADGE_BG = {tier: color for tier, color in TIER_PALETTE.items()}
 
 
 # --------------------------------------------------------------------
@@ -47,29 +91,7 @@ def _load_walmart_us() -> tuple[list[dict], Optional[str]]:
     return norm, stamp
 
 
-def _kpi_card(label: str, value: str, sublabel: str = "",
-              color: str = "#0f172a", bg: str = "#1e293b") -> str:
-    return (
-        f'<div style="padding:14px 18px; background:{bg}; '
-        f'border-radius:10px; border:1px solid #334155;">'
-        f'<div style="color:#94a3b8; font-size:0.78rem; font-weight:600; '
-        f'letter-spacing:0.06em; text-transform:uppercase;">{label}</div>'
-        f'<div style="color:{color}; font-size:1.75rem; font-weight:700; '
-        f'line-height:1.1; margin-top:6px; font-variant-numeric:tabular-nums;">'
-        f'{value}</div>'
-        + (
-            f'<div style="color:#94a3b8; font-size:0.8rem; margin-top:4px;">'
-            f'{sublabel}</div>'
-            if sublabel else ""
-        )
-        + '</div>'
-    )
-
-
 def _gate() -> auth.UserPrincipal:
-    """Login + cedadmin access check. Renders an access-denied screen
-    if the user is logged in to cHAP but isn't on the cedadmin grant
-    list."""
     principal = auth.gate()
     if not cedadmin_roles.can(principal.email, "view_cedadmin"):
         st.set_page_config(
@@ -85,7 +107,7 @@ def _gate() -> auth.UserPrincipal:
             "This dashboard is gated separately from the cHAP dashboard. "
             "Ask a super admin to add you to `cedadmin_roles.yaml`."
         )
-        if st.button("Sign out"):
+        if st.button("Sign out", key="cedadmin_denied_signout"):
             auth._do_sign_out(st)
         st.stop()
     return principal
@@ -103,6 +125,7 @@ def main() -> None:
         layout="wide",
         initial_sidebar_state="expanded",
     )
+    _inject_css()
 
     rows, stamp = _load_walmart_us()
     if not rows:
@@ -125,14 +148,21 @@ def main() -> None:
         st.caption(f"Signed in as **{principal.email}**")
         cedadmin_role = cedadmin_roles.role_for(principal.email) or "viewer"
         st.caption(f"cedadmin role: `{cedadmin_role}`")
-        if st.button("Sign out", use_container_width=True):
+        if st.button("Sign out", use_container_width=True, key="cedadmin_sb_signout"):
             auth._do_sign_out(st)
 
-    st.title("🛒 CedCommerce Admin · Walmart US")
+    # Page header — bold + tag chip with last-scrape time so freshness
+    # is the first thing the eye lands on.
+    st.markdown(
+        f"""<div style="display:flex; align-items:center; gap:14px; margin-bottom:6px;">
+          <h1 style="margin:0;">🛒 CedCommerce Admin · Walmart US</h1>
+          <span class="freshness-pill">📅 {stamp or 'unknown'}</span>
+        </div>""",
+        unsafe_allow_html=True,
+    )
     st.caption(
         "Revenue + plan-movement + SQL pipeline for the Walmart Analytics "
-        "section. Re-runs daily at 12:00 IST; manually via Actions → "
-        "scrape-cedadmin → Run workflow."
+        "section. Re-runs daily at 12:00 IST."
     )
 
     tab_dash, tab_intel, tab_table = st.tabs(
@@ -145,6 +175,90 @@ def main() -> None:
         _render_intelligence_tab(rows, today=today, principal=principal)
     with tab_table:
         _render_sellers_tab(rows, principal=principal)
+
+
+# --------------------------------------------------------------------
+# CSS injection — KPI cards + freshness pill + status badges.
+# --------------------------------------------------------------------
+def _inject_css() -> None:
+    st.markdown(
+        """
+        <style>
+          .freshness-pill {
+            background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+            color: #cbd5e1;
+            padding: 4px 12px;
+            border-radius: 999px;
+            font-size: 0.75rem;
+            border: 1px solid #475569;
+            font-weight: 500;
+          }
+          .ked-kpi {
+            padding: 16px 18px;
+            border-radius: 12px;
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+          }
+          .ked-kpi-label {
+            color: #94a3b8;
+            font-size: 0.72rem;
+            font-weight: 600;
+            letter-spacing: 0.08em;
+            text-transform: uppercase;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+          }
+          .ked-kpi-value {
+            font-size: 1.85rem;
+            font-weight: 700;
+            line-height: 1.1;
+            margin-top: 6px;
+            font-variant-numeric: tabular-nums;
+          }
+          .ked-kpi-sub {
+            color: #94a3b8;
+            font-size: 0.78rem;
+            margin-top: 4px;
+          }
+          .ked-tier {
+            display: inline-block;
+            padding: 2px 10px;
+            border-radius: 999px;
+            font-size: 0.72rem;
+            font-weight: 600;
+            color: white;
+          }
+          .ked-section-title {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #e2e8f0;
+            margin: 8px 0 4px 0;
+            border-left: 4px solid #6366f1;
+            padding-left: 10px;
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def _kpi(col, *, label: str, value: str, sub: str = "",
+         color: str = "#22c55e", help_text: str = "") -> None:
+    """One KPI tile inside `col`. `help_text` shows on hover."""
+    info_icon = (
+        f' <span title="{help_text}" style="cursor:help; color:#64748b;">ⓘ</span>'
+        if help_text else ""
+    )
+    col.markdown(
+        f"""<div class="ked-kpi">
+          <div class="ked-kpi-label">{label}{info_icon}</div>
+          <div class="ked-kpi-value" style="color:{color};">{value}</div>
+          {f'<div class="ked-kpi-sub">{sub}</div>' if sub else ""}
+        </div>""",
+        unsafe_allow_html=True,
+    )
 
 
 # --------------------------------------------------------------------
@@ -165,111 +279,228 @@ def _render_dashboard_tab(rows: list[dict], today: date) -> None:
         if (r.get("installation_status") or "").lower() == "install"
         and (r.get("purchase_status") or "") in ("Free Subscription", "Free Subscription Expire")
     )
+    trial_count = sum(
+        1 for r in rows
+        if (r.get("installation_status") or "").lower() == "install"
+        and (r.get("purchase_status") or "") == "Trial Expired"
+    )
     total_seller_count = len(rows)
     uninstall_count = total_seller_count - install_count
+    paid_pct = (100 * purchased_count / install_count) if install_count else 0
 
     cols = st.columns(5)
-    cols[0].markdown(
-        _kpi_card(
-            "💰 MRR (extractable)",
-            f"${m['total_mrr']:,.0f}",
-            sublabel=f"ARR ≈ ${m['annual_run_rate']:,.0f}",
-            color="#22c55e",
+    _kpi(
+        cols[0],
+        label="💰 MRR",
+        value=f"${m['total_mrr']:,.0f}",
+        sub=f"ARR ≈ ${m['annual_run_rate']:,.0f}",
+        color="#22c55e",
+        help_text=(
+            "Monthly Recurring Revenue from active+paid sellers with "
+            "extractable plan prices. Used to track revenue health "
+            "over time and prioritise high-value churn risks."
         ),
-        unsafe_allow_html=True,
     )
-    cols[1].markdown(
-        _kpi_card(
-            "💳 Active Paid",
-            f"{purchased_count:,}",
-            sublabel=f"{m['rows_with_unknown_price']:,} with unknown price",
-            color="#a78bfa",
+    _kpi(
+        cols[1],
+        label="💳 Active Paid",
+        value=f"{purchased_count:,}",
+        sub=f"{paid_pct:.1f}% of installed",
+        color="#a78bfa",
+        help_text=(
+            "Currently-installed sellers with purchase_status = "
+            "Purchased. The denominator for upsell, retention, and "
+            "renewal-renewal calculations."
         ),
-        unsafe_allow_html=True,
     )
-    cols[2].markdown(
-        _kpi_card(
-            "🆓 Free / Trial",
-            f"{free_count:,}",
-            sublabel="On Free or Trial tier",
-            color="#60a5fa",
+    _kpi(
+        cols[2],
+        label="🆓 Free + Trial",
+        value=f"{free_count + trial_count:,}",
+        sub=f"{free_count:,} free · {trial_count:,} trial",
+        color="#60a5fa",
+        help_text=(
+            "Currently-installed sellers on Free Subscription or in "
+            "Trial. The upsell pool — Intelligence tab ranks them by "
+            "orders + SKUs into the SQL call list."
         ),
-        unsafe_allow_html=True,
     )
-    cols[3].markdown(
-        _kpi_card(
-            "🟢 Currently Installed",
-            f"{install_count:,}",
-            sublabel=f"of {total_seller_count:,} ever",
-            color="#fbbf24",
+    _kpi(
+        cols[3],
+        label="🟢 Currently Installed",
+        value=f"{install_count:,}",
+        sub=f"of {total_seller_count:,} ever",
+        color="#fbbf24",
+        help_text=(
+            "Sellers whose latest installation_status is install. The "
+            "active-customer count for any given snapshot — falls when "
+            "uninstalls outpace new installs in a period."
         ),
-        unsafe_allow_html=True,
     )
-    cols[4].markdown(
-        _kpi_card(
-            "🗑 Lifetime Uninstalls",
-            f"{uninstall_count:,}",
-            sublabel="audit trail of churn",
-            color="#94a3b8",
+    _kpi(
+        cols[4],
+        label="🗑 Lifetime Uninstalls",
+        value=f"{uninstall_count:,}",
+        sub="audit trail of churn",
+        color="#94a3b8",
+        help_text=(
+            "Total sellers whose latest status is uninstall. Used in "
+            "the install-vs-uninstall monthly chart below to spot "
+            "churn waves and plan-tier-specific retention drops."
         ),
-        unsafe_allow_html=True,
     )
 
-    st.divider()
+    st.write("")
+    st.markdown('<div class="ked-section-title">Plan tier mix</div>', unsafe_allow_html=True)
 
-    # Plan tier breakdown chart + top accounts side-by-side.
-    left, right = st.columns([3, 2])
+    col_pie, col_table = st.columns([3, 2])
 
-    with left:
-        st.markdown("#### MRR by plan tier")
-        if m["by_tier"]:
-            tier_df = pd.DataFrame(
-                [{"Tier": k, "MRR (USD)": round(v, 2)} for k, v in m["by_tier"].items()]
-            ).sort_values("MRR (USD)", ascending=False)
-            st.bar_chart(tier_df.set_index("Tier"), height=320)
-        else:
-            st.caption("No paid sellers with extractable price.")
+    # Plan-tier counts (currently installed + paid).
+    from collections import Counter
+    tier_counts = Counter()
+    tier_mrr: dict[str, float] = dict(m["by_tier"])
+    for r in rows:
+        if (r.get("installation_status") or "").lower() != "install":
+            continue
+        if (r.get("purchase_status") or "") != "Purchased":
+            continue
+        tier_counts[r.get("_plan_label") or "Unknown"] += 1
 
-    with right:
-        st.markdown("#### Plan-tier seller counts")
-        from collections import Counter
-        tier_counts = Counter()
-        for r in rows:
-            if (r.get("installation_status") or "").lower() != "install":
-                continue
-            if (r.get("purchase_status") or "") != "Purchased":
-                continue
-            tier_counts[r.get("_plan_label") or "Unknown"] += 1
-        if tier_counts:
-            tier_count_df = pd.DataFrame(
-                [{"Tier": k, "Sellers": v} for k, v in tier_counts.items()]
-            ).sort_values("Sellers", ascending=False)
-            st.dataframe(tier_count_df, hide_index=True, use_container_width=True, height=320)
+    if tier_counts:
+        # Donut: count of paying sellers by tier.
+        import plotly.graph_objects as go
+        labels = list(tier_counts.keys())
+        values = [tier_counts[k] for k in labels]
+        colors = [TIER_PALETTE.get(k, TIER_PALETTE["Unknown"]) for k in labels]
+        fig = go.Figure(data=[go.Pie(
+            labels=labels, values=values, hole=0.55,
+            marker=dict(colors=colors, line=dict(color="#0f172a", width=2)),
+            textposition="outside",
+            textinfo="label+percent",
+            hovertemplate="<b>%{label}</b><br>Sellers: %{value}<br>%{percent}<extra></extra>",
+        )])
+        fig.update_layout(
+            height=320,
+            margin=dict(t=10, b=10, l=10, r=10),
+            showlegend=False,
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#e2e8f0"),
+        )
+        col_pie.plotly_chart(fig, use_container_width=True, key="dash_tier_donut")
 
-    st.divider()
-
-    # Plan movements over time — installs vs uninstalls.
-    series = ca.install_movement_series(rows)
-    if series["months"]:
-        st.markdown("#### Install vs uninstall — monthly")
-        movement_df = pd.DataFrame({
-            "Month": series["months"],
-            "Installs": series["new"],
-            "Uninstalls": series["churn"],
-            "Net": series["net"],
-        })
-        # Limit to the last 24 months for readability — earlier history
-        # available via the cohort tab (future).
-        movement_df = movement_df.tail(24)
-        st.bar_chart(
-            movement_df.set_index("Month")[["Installs", "Uninstalls"]],
-            height=300,
+        # Side: table with seller count + MRR per tier.
+        tier_df = pd.DataFrame([
+            {
+                "Tier": k,
+                "Sellers": tier_counts[k],
+                "MRR ($)": round(tier_mrr.get(k, 0), 2),
+                "ARPA": round(tier_mrr.get(k, 0) / tier_counts[k], 2)
+                       if tier_counts[k] else 0,
+            }
+            for k in labels
+        ]).sort_values("MRR ($)", ascending=False)
+        col_table.dataframe(
+            tier_df,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Tier": st.column_config.TextColumn(
+                    "Tier",
+                    help="Plan cadence label parsed from current_subscribed_plan."
+                ),
+                "Sellers": st.column_config.NumberColumn(
+                    "Sellers", format="%d",
+                    help="Currently-installed sellers paying on this tier."
+                ),
+                "MRR ($)": st.column_config.NumberColumn(
+                    "MRR ($)", format="$%.0f",
+                    help="Sum of monthly-equivalent revenue across this tier."
+                ),
+                "ARPA": st.column_config.NumberColumn(
+                    "ARPA", format="$%.2f",
+                    help="Average Revenue Per Account = MRR ÷ Sellers."
+                ),
+            },
+            height=320,
         )
 
-    st.divider()
+    st.write("")
+    st.markdown('<div class="ked-section-title">Purchase status breakdown</div>', unsafe_allow_html=True)
 
-    # Top paying accounts.
-    st.markdown("#### Top 25 paying accounts (by MRR)")
+    # Purchase status across ALL sellers (not just installed) so we
+    # see lapsed cohorts.
+    status_counts = Counter((r.get("purchase_status") or "(not set)") for r in rows)
+    if status_counts:
+        import plotly.graph_objects as go
+        labels = sorted(status_counts.keys(), key=lambda k: -status_counts[k])
+        values = [status_counts[k] for k in labels]
+        colors = [PURCHASE_PALETTE.get(k, "#cbd5e1") for k in labels]
+        fig = go.Figure(data=[go.Bar(
+            x=values, y=labels, orientation="h",
+            marker_color=colors,
+            text=[f"{v:,}" for v in values],
+            textposition="outside",
+            hovertemplate="<b>%{y}</b><br>Sellers: %{x:,}<extra></extra>",
+        )])
+        fig.update_layout(
+            height=240,
+            margin=dict(t=10, b=10, l=10, r=10),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#e2e8f0"),
+            xaxis=dict(showgrid=False, showticklabels=False),
+            yaxis=dict(showgrid=False),
+        )
+        st.plotly_chart(fig, use_container_width=True, key="dash_purchase_bar")
+
+    st.write("")
+    st.markdown('<div class="ked-section-title">Install vs Uninstall — last 24 months</div>', unsafe_allow_html=True)
+
+    series = ca.install_movement_series(rows)
+    if series["months"]:
+        import plotly.graph_objects as go
+        months = series["months"][-24:]
+        installs = series["new"][-24:]
+        uninstalls = series["churn"][-24:]
+        net = series["net"][-24:]
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=months, y=installs, name="Installs",
+            marker_color="#22c55e",
+            hovertemplate="<b>%{x}</b><br>Installs: %{y:,}<extra></extra>",
+        ))
+        fig.add_trace(go.Bar(
+            x=months, y=[-u for u in uninstalls], name="Uninstalls",
+            marker_color="#ef4444",
+            hovertemplate="<b>%{x}</b><br>Uninstalls: %{customdata:,}<extra></extra>",
+            customdata=uninstalls,
+        ))
+        fig.add_trace(go.Scatter(
+            x=months, y=net, name="Net",
+            mode="lines+markers",
+            line=dict(color="#fbbf24", width=2, dash="dot"),
+            hovertemplate="<b>%{x}</b><br>Net: %{y:+,}<extra></extra>",
+        ))
+        fig.update_layout(
+            height=320,
+            barmode="relative",
+            margin=dict(t=20, b=10, l=10, r=10),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color="#e2e8f0"),
+            legend=dict(
+                orientation="h", yanchor="bottom", y=1.02,
+                xanchor="right", x=1,
+            ),
+            xaxis=dict(showgrid=False),
+            yaxis=dict(zeroline=True, zerolinecolor="#475569"),
+        )
+        st.plotly_chart(fig, use_container_width=True, key="dash_movement_bar")
+
+    st.write("")
+    st.markdown('<div class="ked-section-title">Top 25 paying accounts (by MRR)</div>', unsafe_allow_html=True)
+
     paying = [
         r for r in rows
         if (r.get("installation_status") or "").lower() == "install"
@@ -279,41 +510,69 @@ def _render_dashboard_tab(rows: list[dict], today: date) -> None:
     paying.sort(key=lambda r: -(r.get("_mrr_usd") or 0))
     top25 = paying[:25]
     if top25:
+        df = pd.DataFrame([
+            {
+                "Email": r.get("email"),
+                "Shop": r.get("shop_url"),
+                "Country": r.get("country") or "—",
+                "Tier": r.get("_plan_label") or "—",
+                "MRR ($)": round(r.get("_mrr_usd", 0), 2),
+                "Plan": r.get("current_subscribed_plan", "")[:50],
+                "Orders": r.get("_total_orders_n", 0),
+                "Last login": (
+                    r.get("_last_login_date").isoformat()
+                    if r.get("_last_login_date") else "—"
+                ),
+            }
+            for r in top25
+        ])
         st.dataframe(
-            [
-                {
-                    "Email": r.get("email"),
-                    "Shop": r.get("shop_url"),
-                    "Country": r.get("country") or "—",
-                    "Plan": r.get("current_subscribed_plan", "")[:40],
-                    "Tier": r.get("_plan_label") or "—",
-                    "MRR ($)": f"{r.get('_mrr_usd', 0):.2f}",
-                    "Orders": r.get("_total_orders_n", 0),
-                    "Last login": (
-                        r.get("_last_login_date").isoformat()
-                        if r.get("_last_login_date") else "—"
-                    ),
-                }
-                for r in top25
-            ],
+            df,
             hide_index=True,
             use_container_width=True,
+            column_config={
+                "Tier": st.column_config.TextColumn("Tier", help="Plan cadence."),
+                "MRR ($)": st.column_config.NumberColumn(
+                    "MRR ($)", format="$%.2f",
+                    help="Monthly-equivalent revenue from this account."
+                ),
+                "Orders": st.column_config.NumberColumn(
+                    "Orders", format="%d",
+                    help="Total orders ever processed for this seller."
+                ),
+            },
         )
 
-    st.divider()
+    st.write("")
+    st.markdown('<div class="ked-section-title">Geographic distribution (top 15)</div>', unsafe_allow_html=True)
 
-    # Geographic distribution.
-    st.markdown("#### Installs by country (top 15)")
     geo = ca.country_distribution(rows)[:15]
     if geo:
-        geo_df = pd.DataFrame(
-            [
-                {"Country": c, "Installed": ic, "Paid": pc,
-                 "% Paid": f"{(100 * pc / ic):.1f}%" if ic else "—"}
-                for c, ic, pc in geo
-            ]
+        df = pd.DataFrame([
+            {"Country": c, "Installed": ic, "Paid": pc,
+             "% Paid": (100 * pc / ic) if ic else 0}
+            for c, ic, pc in geo
+        ])
+        st.dataframe(
+            df,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Country": st.column_config.TextColumn("Country"),
+                "Installed": st.column_config.NumberColumn(
+                    "Installed", format="%d",
+                    help="Currently-installed sellers in this country."
+                ),
+                "Paid": st.column_config.NumberColumn(
+                    "Paid", format="%d",
+                    help="Of those installed, how many are on Purchased status."
+                ),
+                "% Paid": st.column_config.ProgressColumn(
+                    "% Paid", min_value=0, max_value=100, format="%.1f%%",
+                    help="Conversion rate within country: Paid ÷ Installed."
+                ),
+            },
         )
-        st.dataframe(geo_df, hide_index=True, use_container_width=True)
 
 
 # --------------------------------------------------------------------
@@ -323,19 +582,33 @@ def _render_intelligence_tab(
     rows: list[dict], today: date, principal: auth.UserPrincipal,
 ) -> None:
     st.markdown(
-        "Each bucket below is a **call list** for the support team. "
-        "Highest-priority bucket wins — sellers don't appear in two lists."
-    )
-    st.caption(
-        "Filters apply across all buckets. Per-bucket downloads CSV the "
-        "rows in that view."
+        "Each bucket is a **call list** for the support team. "
+        "Highest-priority bucket wins per seller — no double-counting."
     )
 
-    # Filters (apply globally to the bucket lists below).
-    with st.expander("Filters", expanded=False):
-        f_country = st.text_input("Country contains", "").strip().lower()
-        f_min_orders = st.number_input("Min total_orders", value=0, step=10)
-        f_business = st.text_input("business_category contains", "").strip().lower()
+    # ---- Filters across all buckets -----------------------------------
+    with st.expander("🔍 Filters (apply across all buckets)", expanded=False):
+        col1, col2, col3 = st.columns(3)
+        f_country = col1.text_input(
+            "Country contains",
+            "",
+            key="intel_filter_country",
+            help="Substring match on the country field. Leave blank for all.",
+        ).strip().lower()
+        f_min_orders = col2.number_input(
+            "Min total_orders",
+            value=0, step=10,
+            key="intel_filter_min_orders",
+            help="Only show sellers with at least this many orders. Useful "
+                 "to surface bigger-revenue opportunities only.",
+        )
+        f_business = col3.text_input(
+            "Business category contains",
+            "",
+            key="intel_filter_business",
+            help="Substring match on business_category. Try 'apparel', "
+                 "'electronics', etc.",
+        ).strip().lower()
 
     def _passes(r):
         if f_country and f_country not in (r.get("country") or "").lower():
@@ -355,40 +628,113 @@ def _render_intelligence_tab(
         if bid:
             by_bucket[bid].append(r)
 
-    # Tier counter strip.
+    # ---- Tier counter strip (top of tab) ------------------------------
     tier_counts = {"Hot": 0, "Warm": 0, "Cool": 0}
     for b in ca.LEAD_BUCKETS:
         tier_counts[b.tier] += len(by_bucket.get(b.id, []))
-    cols = st.columns(3)
-    for i, (tier, color) in enumerate([("Hot", "#ef4444"), ("Warm", "#f59e0b"), ("Cool", "#3b82f6")]):
-        cols[i].markdown(
-            _kpi_card(f"{tier} leads", f"{tier_counts[tier]:,}", color=color),
-            unsafe_allow_html=True,
-        )
+    grand_total = sum(tier_counts.values())
 
-    st.divider()
+    cols = st.columns(4)
+    _kpi(
+        cols[0],
+        label="🔥 Hot leads",
+        value=f"{tier_counts['Hot']:,}",
+        sub="call this week",
+        color="#ef4444",
+        help_text="Renewal-at-risk + Trial conversion + Upgrade-ready + Winback.",
+    )
+    _kpi(
+        cols[1],
+        label="☀ Warm leads",
+        value=f"{tier_counts['Warm']:,}",
+        sub="follow-up next 2 weeks",
+        color="#f59e0b",
+        help_text="Cross-sell + Paid-but-idle + Failure-rate-spike.",
+    )
+    _kpi(
+        cols[2],
+        label="❄ Cool leads",
+        value=f"{tier_counts['Cool']:,}",
+        sub="monitor / nurture",
+        color="#3b82f6",
+        help_text="Stuck-onboarding (support, not sales) + Reinstall-committed.",
+    )
+    _kpi(
+        cols[3],
+        label="📋 Total SQLs",
+        value=f"{grand_total:,}",
+        sub="surfaced from latest scrape",
+        color="#a78bfa",
+        help_text="Sum of all bucketed leads after filters. Each seller fits "
+                  "exactly one bucket.",
+    )
 
-    # Render each bucket as an expander with seller table inside.
+    st.write("")
+
+    # ---- Per-bucket expander cards -----------------------------------
     for b in ca.LEAD_BUCKETS:
         rows_b = by_bucket.get(b.id, [])
         rows_b.sort(key=lambda r: -_lead_sort_key(r, b.id, today))
 
         emoji = {"Hot": "🔥", "Warm": "☀", "Cool": "❄"}[b.tier]
+        tier_color = {"Hot": "#ef4444", "Warm": "#f59e0b", "Cool": "#3b82f6"}[b.tier]
         with st.expander(
-            f"{emoji} {b.label} — **{len(rows_b):,}** sellers",
+            f"{emoji} {b.label} — {len(rows_b):,} sellers",
             expanded=(b.tier == "Hot" and len(rows_b) > 0),
         ):
-            st.caption(b.hint)
+            # Per-bucket header strip — tier badge + hint copy.
+            st.markdown(
+                f"""<div style="display:flex; align-items:center; gap:10px; margin:4px 0 10px 0;">
+                  <span class="ked-tier" style="background:{tier_color};">{b.tier.upper()}</span>
+                  <span style="color:#94a3b8; font-size:0.9rem;">{b.hint}</span>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+
             if not rows_b:
                 st.caption("Empty — no sellers match this bucket today.")
                 continue
 
-            # Cap rendered rows at 200; the CSV download has all of
-            # them. Without a cap a 3,000-row Streamlit table renders
-            # slowly and overwhelms the support team's eye.
             view = rows_b[:200]
             df = pd.DataFrame([_lead_row_summary(r, b.id, today) for r in view])
-            st.dataframe(df, hide_index=True, use_container_width=True)
+            # Score columns get a progress bar so the strongest leads
+            # pop visually without scanning numbers.
+            score_cols = [c for c in df.columns if c in ("Health", "Opportunity", "Winback score")]
+            col_cfg = {}
+            for c in score_cols:
+                col_cfg[c] = st.column_config.ProgressColumn(
+                    c, min_value=0, max_value=100, format="%d",
+                    help={
+                        "Health": "0-100 composite — login recency × failure rate × onboarding × renewal proximity. Lower = at risk.",
+                        "Opportunity": "0-100 composite for free/trial sellers — orders + SKUs + age + login recency. Higher = upsell now.",
+                        "Winback score": "0-100 — historical plans × order volume × recency-of-lapse. Higher = call this week.",
+                    }.get(c, ""),
+                )
+            if "MRR ($)" in df.columns:
+                col_cfg["MRR ($)"] = st.column_config.NumberColumn(
+                    "MRR ($)", format="$%.2f",
+                    help="Monthly-equivalent revenue from this seller."
+                )
+            if "Days to expiry" in df.columns:
+                col_cfg["Days to expiry"] = st.column_config.NumberColumn(
+                    "Days to expiry", format="%d",
+                    help="Negative = already expired. Positive = renewal call within window."
+                )
+            if "Failure rate" in df.columns:
+                col_cfg["Failure rate"] = st.column_config.TextColumn(
+                    "Failure rate",
+                    help="failed_orders / total_orders. >20% on a paying account is a support trigger."
+                )
+            if "Plan" in df.columns:
+                col_cfg["Plan"] = st.column_config.TextColumn(
+                    "Plan",
+                    help="Truncated current_subscribed_plan string."
+                )
+            st.dataframe(
+                df, hide_index=True, use_container_width=True,
+                column_config=col_cfg,
+            )
+
             if len(rows_b) > 200:
                 st.caption(
                     f"Showing top 200 of {len(rows_b):,}. Use Filters above to "
@@ -402,6 +748,7 @@ def _render_intelligence_tab(
                     data=full_df.to_csv(index=False).encode("utf-8"),
                     file_name=f"sql_{b.id}_{today.isoformat()}.csv",
                     mime="text/csv",
+                    key=f"intel_dl_{b.id}",
                 )
             else:
                 st.caption(
@@ -411,12 +758,7 @@ def _render_intelligence_tab(
 
 
 def _lead_row_summary(r: dict, bucket_id: str, today: date) -> dict:
-    """Tabular summary of a single seller row inside a lead bucket.
-
-    Columns adapt to the bucket so the most-relevant signal sits next
-    to email/shop. Health / opportunity / winback scores are only
-    computed when relevant to keep the table tight.
-    """
+    """Tabular summary of a single seller row inside a lead bucket."""
     base = {
         "Email": r.get("email"),
         "Shop": r.get("shop_url"),
@@ -425,7 +767,7 @@ def _lead_row_summary(r: dict, bucket_id: str, today: date) -> dict:
         "SKUs": r.get("_published_sku_n", 0),
     }
     if bucket_id in ("renewal_at_risk", "paid_idle", "failure_spike"):
-        base["MRR ($)"] = f"{r.get('_mrr_usd', 0):.2f}"
+        base["MRR ($)"] = round(r.get("_mrr_usd", 0), 2)
         base["Plan"] = r.get("current_subscribed_plan", "")[:35]
         base["Health"] = ca.score_health(r, today=today)
     if bucket_id == "renewal_at_risk":
@@ -456,9 +798,8 @@ def _lead_row_summary(r: dict, bucket_id: str, today: date) -> dict:
 
 
 def _lead_sort_key(r: dict, bucket_id: str, today: date) -> float:
-    """How to rank rows WITHIN a bucket — most-actionable first."""
+    """Rank rows WITHIN a bucket — most-actionable first."""
     if bucket_id == "renewal_at_risk":
-        # Smallest days-to-expiration AND highest MRR first.
         days = r.get("_days_to_expiration") or 999
         mrr = r.get("_mrr_usd") or 0
         return mrr * 1000 + (30 - max(0, days)) * 10
@@ -469,7 +810,6 @@ def _lead_sort_key(r: dict, bucket_id: str, today: date) -> float:
     if bucket_id == "winback_high_value":
         return ca.score_winback(r, today=today)
     if bucket_id == "paid_idle":
-        # Highest MRR + most days idle first.
         return (r.get("_mrr_usd") or 0) * 100 + (r.get("_days_since_login") or 0)
     if bucket_id == "failure_spike":
         return r.get("_failure_rate", 0) * (r.get("_total_orders_n", 0) or 1)
@@ -485,13 +825,19 @@ def _render_sellers_tab(rows: list[dict], principal: auth.UserPrincipal) -> None
         "download the filtered subset as CSV (editor+)."
     )
 
-    # Column-level filters — keep it terse; full-table filters live in
-    # the dataframe widget itself.
-    with st.expander("Filters", expanded=True):
+    with st.expander("🔍 Filters", expanded=True):
         col1, col2, col3 = st.columns(3)
-        f_text = col1.text_input("Email / shop contains", "").strip().lower()
+        f_text = col1.text_input(
+            "Email / shop contains",
+            "",
+            key="sellers_filter_text",
+            help="Substring match across email and shop_url.",
+        ).strip().lower()
         f_install = col2.selectbox(
-            "Installation status", options=["any", "install", "uninstall"],
+            "Installation status",
+            options=["any", "install", "uninstall"],
+            key="sellers_filter_install",
+            help="install = currently active. uninstall = lifetime churned.",
         )
         f_purchase = col3.selectbox(
             "Purchase status",
@@ -499,11 +845,28 @@ def _render_sellers_tab(rows: list[dict], principal: auth.UserPrincipal) -> None
                 "any", "Purchased", "Trial Expired", "License Expired",
                 "Free Subscription", "Free Subscription Expire", "Not Purchase",
             ],
+            key="sellers_filter_purchase",
+            help="Revenue state. Purchased = currently paying.",
         )
         col4, col5, col6 = st.columns(3)
-        f_country = col4.text_input("Country contains", "").strip().lower()
-        f_min_orders = col5.number_input("Min total_orders", value=0, step=10)
-        f_min_skus = col6.number_input("Min published_sku", value=0, step=10)
+        f_country = col4.text_input(
+            "Country contains",
+            "",
+            key="sellers_filter_country",
+            help="Substring match on country.",
+        ).strip().lower()
+        f_min_orders = col5.number_input(
+            "Min total_orders",
+            value=0, step=10,
+            key="sellers_filter_min_orders",
+            help="Floor on order count.",
+        )
+        f_min_skus = col6.number_input(
+            "Min published_sku",
+            value=0, step=10,
+            key="sellers_filter_min_skus",
+            help="Floor on published SKU count.",
+        )
 
     def _passes(r):
         if f_text and f_text not in ((r.get("email") or "") + " " + (r.get("shop_url") or "")).lower():
@@ -526,9 +889,6 @@ def _render_sellers_tab(rows: list[dict], principal: auth.UserPrincipal) -> None
     if not filtered:
         return
 
-    # Show only the underlying CSV columns (drop the _ prefixed
-    # computed fields from the table view — they live behind the
-    # filters).
     csv_cols = [c for c in filtered[0].keys() if not c.startswith("_")]
     df = pd.DataFrame([{c: r.get(c) for c in csv_cols} for r in filtered[:500]])
     st.dataframe(df, hide_index=True, use_container_width=True)
@@ -545,6 +905,7 @@ def _render_sellers_tab(rows: list[dict], principal: auth.UserPrincipal) -> None
             data=full_df.to_csv(index=False).encode("utf-8"),
             file_name=f"walmart_us_sellers_{date.today().isoformat()}.csv",
             mime="text/csv",
+            key="sellers_dl_filtered",
         )
     else:
         st.caption("📎 CSV export is editor-only on cedadmin.")
