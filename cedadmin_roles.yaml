@@ -1,0 +1,18 @@
+# cedadmin_roles.yaml — access list for the CedCommerce admin panel
+# dashboard. Intentionally SEPARATE from roles.yaml (cHAP). Adding
+# someone here grants them visibility on cedadmin only; cHAP role
+# is independent.
+#
+# Roles:
+#   super_admin  — sees everything, can manage cedadmin grants
+#   editor       — can view + export CSVs from the Sellers tab
+#   viewer       — view-only (default for any new email)
+#
+# The hard-coded super-admin from roles.py also has cedadmin
+# super_admin by virtue of being the project owner.
+
+schema_version: 1
+
+# Map of email → role for cedadmin access.
+roles:
+  hsrivastava@threecolts.com: super_admin
