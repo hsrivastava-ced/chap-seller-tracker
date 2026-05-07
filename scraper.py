@@ -2999,14 +2999,9 @@ def main():
                 # table with the now-saved column preferences. Without this,
                 # newly-toggled-on columns (specifically Plan Details) come
                 # back as plain "N/A" placeholders for every row even when
-                # plans exist server-side — verified live 2026-05-07 on
-                # michael where the diagnostic dump showed
-                # `<td>N/A</td>` (no badge wrapper) while the same panel
-                # rendered styled badges in a normal browser session that
-                # already had Plan Details enabled in saved prefs.
-                # Other optional columns (order_count, product_count) are
-                # included in the initial payload regardless — only Plan
-                # Details requires the saved-pref → refetch round trip.
+                # plans exist server-side. Other optional columns
+                # (order_count, product_count) are included in the initial
+                # payload regardless.
                 try:
                     logging.info(
                         f"   ↳ reloading {app_name} seller page so saved "
@@ -3030,6 +3025,69 @@ def main():
                         f"post-Customize Grid reload raised for {app_name}; "
                         "continuing — plan column may stay as N/A."
                     )
+
+                # Diagnostic: pull the logged-in cHAP user email out of
+                # the rendered page so we can confirm WHICH account the
+                # scraper authenticated as. Searches every text node
+                # (excluding the data table) for a *@threecolts.com
+                # match and writes the first hit + the URL + the page
+                # title to results/debug/session_<app>.txt. Lets us
+                # cross-check against the account that sees plan badges
+                # in a manual browser session.
+                try:
+                    safe_label_for_session = re.sub(
+                        r"[^A-Za-z0-9_]+", "_", app_name
+                    ).strip("_") or "app"
+                    session_info = page.evaluate("""() => {
+                        const found = new Set();
+                        // Walk every element OUTSIDE the seller data table
+                        // so we don't pick up sellers whose emails are also
+                        // @threecolts (test stores).
+                        const tables = document.querySelectorAll('table.ant-table-content, .ant-table-tbody');
+                        const skip = new Set();
+                        tables.forEach(t => skip.add(t));
+                        const walker = document.createTreeWalker(
+                            document.body, NodeFilter.SHOW_TEXT, null
+                        );
+                        let n;
+                        while ((n = walker.nextNode())) {
+                            let p = n.parentElement;
+                            let inTable = false;
+                            while (p) {
+                                if (skip.has(p)) { inTable = true; break; }
+                                if (p.tagName === 'TABLE') {
+                                    // Any table — skip to be safe
+                                    inTable = true;
+                                    break;
+                                }
+                                p = p.parentElement;
+                            }
+                            if (inTable) continue;
+                            const m = n.nodeValue && n.nodeValue.match(/[A-Za-z0-9._-]+@threecolts\\.com/);
+                            if (m) found.add(m[0]);
+                        }
+                        return {
+                            url: location.href,
+                            title: document.title,
+                            emails_outside_table: Array.from(found),
+                        };
+                    }""")
+                    debug_dir = Path("results/debug")
+                    debug_dir.mkdir(parents=True, exist_ok=True)
+                    (debug_dir / f"session_{safe_label_for_session}.txt").write_text(
+                        f"app: {app_name}\n"
+                        f"url: {session_info.get('url')}\n"
+                        f"title: {session_info.get('title')}\n"
+                        f"emails_outside_table: {session_info.get('emails_outside_table')}\n",
+                        encoding="utf-8",
+                    )
+                    logging.info(
+                        f"   ↳ session diagnostic for {app_name}: "
+                        f"emails_outside_table="
+                        f"{session_info.get('emails_outside_table')}"
+                    )
+                except Exception as session_err:
+                    logging.debug(f"   ↳ session diagnostic skipped: {session_err}")
 
                 # --- Page size: 20 → 100 (perf) ---
                 # Do this AFTER Customize Grid so the grid-column-sticking
