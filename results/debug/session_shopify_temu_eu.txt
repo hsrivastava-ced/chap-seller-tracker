@@ -1,7 +1,7 @@
 app: shopify_temu_eu
 url: https://app-v2-frontend.cifapps.com/panel/6891d7f0ef3dd13c1e0f4032/seller
 title: common-home-admin-panel
-all_emails (anywhere): ['avishwakrma@threecolts.com', 'shussain@threecolts.com']
+all_emails (anywhere): ['avishwakrma@threecolts.com']
 cookies: ['=(0 chars)']
 
 --- localStorage ---
@@ -37,11 +37,11 @@ cookies: ['=(0 chars)']
   {
     "key": "18cc6ee07d90cf79c4d27421243f98fc",
     "len": 62,
-    "preview": "Thu May 07 2026 18:05:15 GMT+0000 (Coordinated Universal Time)"
+    "preview": "Thu May 07 2026 19:51:23 GMT+0000 (Coordinated Universal Time)"
   },
   {
     "key": "9cebb1ec45ffd481c822f589ec5a45b9",
     "len": 574,
-    "preview": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJ1c2VyX2lkIjoiNjg5MWQ3ZjBlZjNkZDEzYzFlMGY0MDMyIiwicm9sZSI6ImJkYSIsImV4cCI6MTc3ODE4MDcxNSwiaXNzIjoiaHR0cHM6XC9cL2FwcHMuY2VkY29tbWVyY2UuY29tIiwidG9rZW5faWQiOiI2OWZ"
+    "preview": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJ1c2VyX2lkIjoiNjg5MWQ3ZjBlZjNkZDEzYzFlMGY0MDMyIiwicm9sZSI6ImJkYSIsImV4cCI6MTc3ODE4NzA4MiwiaXNzIjoiaHR0cHM6XC9cL2FwcHMuY2VkY29tbWVyY2UuY29tIiwidG9rZW5faWQiOiI2OWZ"
   }
 ]

@@ -1,0 +1,22 @@
+app: shopify_temu
+row_count: 83
+
+populated counts (non-empty):
+  plan: 83/83
+  order_count: 83/83
+  product_count: 83/83
+  failed_order_count: 83/83
+  steps_completed: 83/83
+  last_sync: 0/83
+
+plan distribution (top 20):
+  'N/A'                          60
+  'Starter'                      16
+  'Standard'                     2
+  'Premium'                      2
+  'Trial'                        1
+  'Yearly Custom Plan'           1
+  'Custom Yearly'                1
+
+first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
+first_row repr (truncated): {'seller_id': '69cd21be45afb6f71b0435b2', 'store_url': 'testshop-arun-1.myshopify.com', 'username': 'mshukla@threecolts.com', 'email': 'mshukla@threecolts.com', 'platforms': 'Shopify Temu', 'installed_on': '01/04/2026', 'app_type': '', 'source_country': 'India', 'order_count': '0', 'product_count': '800', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}

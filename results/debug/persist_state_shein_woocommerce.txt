@@ -1,0 +1,17 @@
+app: shein_woocommerce
+row_count: 42
+
+populated counts (non-empty):
+  plan: 42/42
+  order_count: 42/42
+  product_count: 42/42
+  failed_order_count: 42/42
+  steps_completed: 42/42
+  last_sync: 0/42
+
+plan distribution (top 20):
+  'N/A'                          29
+  'Beginner Plan'                13
+
+first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
+first_row repr (truncated): {'seller_id': '69f9e2ac08df905e52017cca', 'store_url': 'https://fairpricegd.com', 'username': 'fairpricegd.com', 'email': 'hamza.h3techs@gmail.com', 'platforms': 'Woocommerce', 'installed_on': '05/05/2026', 'app_type': '', 'source_country': 'N/A', 'order_count': 'N/A', 'product_count': 'N/A', 'failed_order_count': 'N/A', 'steps_completed': '1', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}

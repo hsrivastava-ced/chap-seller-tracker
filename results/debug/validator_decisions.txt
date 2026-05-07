@@ -1,18 +1,67 @@
-=== michael / sellers → OK ===
+=== shopify_temu / sellers → OK ===
   - customize_grid: ok
       · Observed 11 column options in Customize Grid.
       · Required: 4 (missing: 0)
       · Unexpected extras: 0
   - pagination: ok
   - row_count_sellers: ok
-      · Current sellers: 254 rows.
-      · Previous sellers: 254 rows. Drop: 0.0% (soft=20%, hard=50%).
+      · Current sellers: 83 rows.
+      · Previous sellers: 83 rows. Drop: 0.0% (soft=20%, hard=50%).
 
-=== michael / uninstalls → BLOCKED ===
+=== shopify_temu / uninstalls → OK ===
+  - pagination: ok
+  - row_count_uninstalls: ok
+      · Current uninstalls: 118 rows.
+      · Previous uninstalls: 118 rows. Drop: 0.0% (soft=20%, hard=50%).
+
+=== shein / sellers → OK ===
+  - customize_grid: ok
+      · Observed 12 column options in Customize Grid.
+      · Required: 4 (missing: 0)
+      · Unexpected extras: 0
+  - pagination: ok
+  - row_count_sellers: ok
+      · Current sellers: 345 rows.
+      · Previous sellers: 346 rows. Drop: 0.3% (soft=20%, hard=50%).
+
+=== shein / uninstalls → OK ===
+  - pagination: ok
+  - row_count_uninstalls: ok
+      · Current uninstalls: 327 rows.
+      · Previous uninstalls: 325 rows. Drop: 0.0% (soft=20%, hard=50%).
+
+=== shopify_temu_eu / sellers → BLOCKED ===
+  - customize_grid: ok
+      · Observed 11 column options in Customize Grid.
+      · Required: 4 (missing: 0)
+      · Unexpected extras: 0
+  - pagination: blocked
+      · Page numbers [1, 1] did not form the expected sequence [1, 2].
+      → Pagination likely double-advanced or repeated. Re-run after confirming the Next-button click handler is not stuck.
+  - row_count_sellers: ok
+      · Current sellers: 69 rows.
+      · Previous sellers: 73 rows. Drop: 5.5% (soft=20%, hard=50%).
+
+=== shopify_temu_eu / uninstalls → OK ===
+  - pagination: ok
+  - row_count_uninstalls: ok
+      · Current uninstalls: 131 rows.
+      · Previous uninstalls: 79 rows. Drop: 0.0% (soft=20%, hard=50%).
+
+=== shein_woocommerce / sellers → OK ===
+  - customize_grid: ok
+      · Observed 11 column options in Customize Grid.
+      · Required: 4 (missing: 0)
+      · Unexpected extras: 0
+  - pagination: ok
+  - row_count_sellers: ok
+      · Current sellers: 42 rows.
+      · Previous sellers: 42 rows. Drop: 0.0% (soft=20%, hard=50%).
+
+=== shein_woocommerce / uninstalls → OK ===
   - pagination: ok
       · No pagination trace captured.
-  - row_count_uninstalls: blocked
+  - row_count_uninstalls: ok
       · Current uninstalls: 0 rows.
-      · Previous uninstalls: 29 rows. Drop: 100.0% (soft=20%, hard=50%).
-      → Row count dropped >50% vs previous run. Likely a silent login/landing failure — keep last-good CSV.
+      · No previous row count available for comparison — skipping drop check.
 

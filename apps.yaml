@@ -12,7 +12,7 @@ apps:
   notes: ''
   shared_schedule: true
   frameworks:
-  - auto
+  - shopify
 - id: shein
   label: SHEIN
   dropdown_value: shein
@@ -25,7 +25,7 @@ apps:
   notes: ''
   shared_schedule: true
   frameworks:
-  - auto
+  - shopify
 - id: shopify_temu_eu
   label: TEMU EU (Shopify)
   dropdown_value: shopify_temu_eu
@@ -38,7 +38,8 @@ apps:
   notes: ''
   shared_schedule: true
   frameworks:
-  - auto
+  - shopify
+  - prestashop
 - id: shein_woocommerce
   label: SHEIN WooCommerce
   dropdown_value: shein_woocommerce
@@ -51,7 +52,7 @@ apps:
   notes: Promoted to canonical 2026-04-24 after clean scrape (20 sellers, 0 uninstalls).
   shared_schedule: true
   frameworks:
-  - auto
+  - woocommerce
 - id: shopify_gearexchange
   label: Shopify GearExchange
   dropdown_value: shopify_gearexchange

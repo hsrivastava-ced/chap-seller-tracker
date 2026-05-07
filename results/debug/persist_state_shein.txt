@@ -1,0 +1,32 @@
+app: shein
+row_count: 345
+
+populated counts (non-empty):
+  plan: 345/345
+  order_count: 345/345
+  product_count: 345/345
+  failed_order_count: 345/345
+  steps_completed: 345/345
+  last_sync: 0/345
+
+plan distribution (top 20):
+  'N/A'                          221
+  'Starter'                      80
+  'Basic'                        20
+  'Plus'                         5
+  'Standard'                     5
+  'Beginner'                     2
+  'Enterprise Starter'           2
+  'Custom plan 380'              1
+  'Enterprise Plus'              1
+  'Combo with Tiktok Plan 300'   1
+  'Enterprise Basic'             1
+  'Discounted Plan 999'          1
+  'Combo with Tiktok Plan 250'   1
+  'Custom plan 349'              1
+  'Discounted Plan 870'          1
+  'Custom plan 8000'             1
+  'Product Sync'                 1
+
+first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
+first_row repr (truncated): {'seller_id': '69f1010c3e9ef56f8f060842', 'store_url': 'www.vysn.com', 'username': 'senditures.myshopify.com', 'email': 'admin@vysn.com', 'platforms': 'Shopify Shein', 'installed_on': '28/04/2026', 'app_type': 'Custom App', 'source_country': 'United States', 'order_count': '0', 'product_count': '1776461', 'failed_order_count': '0', 'steps_completed': '3', 'plan': 'Basic', 'last_sync': '', 'webhooks': 'View', 'action': ''}
