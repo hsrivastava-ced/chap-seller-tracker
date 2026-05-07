@@ -2995,6 +2995,42 @@ def main():
                     )
                 observed_labels_by_app[app_name] = observed_labels
 
+                # Reload AFTER Customize Grid so cHAP refetches the seller
+                # table with the now-saved column preferences. Without this,
+                # newly-toggled-on columns (specifically Plan Details) come
+                # back as plain "N/A" placeholders for every row even when
+                # plans exist server-side — verified live 2026-05-07 on
+                # michael where the diagnostic dump showed
+                # `<td>N/A</td>` (no badge wrapper) while the same panel
+                # rendered styled badges in a normal browser session that
+                # already had Plan Details enabled in saved prefs.
+                # Other optional columns (order_count, product_count) are
+                # included in the initial payload regardless — only Plan
+                # Details requires the saved-pref → refetch round trip.
+                try:
+                    logging.info(
+                        f"   ↳ reloading {app_name} seller page so saved "
+                        "column prefs take effect for plan-data fetch."
+                    )
+                    page.reload(wait_until="domcontentloaded", timeout=20000)
+                    page.wait_for_selector(
+                        "tr.ant-table-row", timeout=15000
+                    )
+                    # Same spinner-aware settle the framework flip uses.
+                    try:
+                        page.wait_for_selector(
+                            ".ant-spin-spinning",
+                            state="hidden",
+                            timeout=8000,
+                        )
+                    except Exception:
+                        page.wait_for_timeout(800)
+                except Exception:
+                    logging.exception(
+                        f"post-Customize Grid reload raised for {app_name}; "
+                        "continuing — plan column may stay as N/A."
+                    )
+
                 # --- Page size: 20 → 100 (perf) ---
                 # Do this AFTER Customize Grid so the grid-column-sticking
                 # race (serial tick / popup re-open) has already completed
