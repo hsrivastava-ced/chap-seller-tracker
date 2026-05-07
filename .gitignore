@@ -36,3 +36,10 @@ error_*.png
 results/staging/
 results/history/
 results/latest/INVALID_RUN.md
+
+# CedCommerce admin panel scraper — see panels/cedcommerce_admin.py.
+# `latest/` is committed (small enough, dashboards read from it).
+# `history/` is per-run audit trail; gitignored just like the cHAP
+# scraper's results/history/.
+cedadmin_data/history/
+cedadmin_data/staging/

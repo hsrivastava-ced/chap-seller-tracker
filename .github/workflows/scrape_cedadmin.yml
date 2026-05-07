@@ -1,0 +1,141 @@
+# =============================================================================
+#  CedCommerce admin panel scraper — Yii2 GridView, single-request bulk fetch.
+#  ---------------------------------------------------------------------------
+#  Targets admin.apps.cedcommerce.com. INTENTIONALLY isolated from the cHAP
+#  scrape.yml workflow:
+#    - Different secrets (CED_ADMIN_USER / CED_ADMIN_PASS, panel-level not
+#      per-app).
+#    - Different output tree (cedadmin_data/, not results/).
+#    - Different cron — runs once daily because the panel is much faster
+#      (~12s for Walmart's 26k rows vs. cHAP's multi-minute pagination).
+#    - Different (app, section) iteration loop driven by cedadmin_apps.yaml.
+#
+#  Each (app, section) pair is one HTTP request: login (Playwright) →
+#  steal cookies → requests.get with ?per-page=50000&columns[X]=1...
+#  → pandas.read_html → CSV under cedadmin_data/latest/.
+#
+#  Phase 1: only walmart_us / analytics is wired in panels/cedcommerce_admin.py
+#  ::SECTIONS. Other sections per marketplace land in future commits.
+# =============================================================================
+
+name: scrape-cedadmin
+
+on:
+  schedule:
+    # Once a day at 06:30 UTC (12:00 IST) — same anchor as the noon
+    # cHAP scrape so dashboards reload in roughly the same window.
+    - cron: "30 6 * * *"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why this manual run?"
+        required: false
+        default: "on-demand"
+      target_app:
+        description: "Limit to this app id (e.g. walmart_us). Blank = all."
+        required: false
+        default: ""
+      target_section:
+        description: "Limit to this section id (e.g. analytics). Blank = all."
+        required: false
+        default: ""
+
+concurrency:
+  group: scrape-cedadmin-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    name: Scrape CedCommerce admin
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Python deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # Playwright Chromium browser binary (Python pkg installs the
+          # client; the browser binary needs a separate download).
+          python -m playwright install --with-deps chromium
+
+      - name: Iterate cedadmin_apps.yaml + scrape enabled sections
+        env:
+          CED_ADMIN_USER: ${{ secrets.CED_ADMIN_USER }}
+          CED_ADMIN_PASS: ${{ secrets.CED_ADMIN_PASS }}
+          TARGET_APP: ${{ inputs.target_app }}
+          TARGET_SECTION: ${{ inputs.target_section }}
+        run: |
+          set -e
+          if [ -z "$CED_ADMIN_USER" ] || [ -z "$CED_ADMIN_PASS" ]; then
+            echo "::error::CED_ADMIN_USER / CED_ADMIN_PASS not set in repo secrets"
+            exit 1
+          fi
+          python <<'PY'
+          import os, sys, yaml, subprocess
+          target_app = (os.environ.get("TARGET_APP") or "").strip()
+          target_section = (os.environ.get("TARGET_SECTION") or "").strip()
+          with open("cedadmin_apps.yaml") as f:
+              cfg = yaml.safe_load(f) or {}
+          apps = cfg.get("apps") or []
+          ran = 0
+          failures = []
+          for app in apps:
+              app_id = app.get("id") or ""
+              if target_app and target_app != app_id:
+                  continue
+              for section in (app.get("sections") or []):
+                  if not section.get("enabled"):
+                      continue
+                  section_id = section.get("id") or ""
+                  if target_section and target_section != section_id:
+                      continue
+                  print(f"=== scraping {app_id} / {section_id} ===", flush=True)
+                  rc = subprocess.call([
+                      sys.executable, "-m", "panels.cedcommerce_admin",
+                      app_id, section_id,
+                  ])
+                  if rc != 0:
+                      failures.append(f"{app_id}/{section_id} (rc={rc})")
+                  ran += 1
+          print(f"\nDone — ran {ran} (app, section) scrape(s).", flush=True)
+          if failures:
+              print(f"FAILURES: {failures}", flush=True)
+              sys.exit(1)
+          PY
+
+      - name: Commit cedadmin_data/latest back to main
+        run: |
+          git config user.name "cedadmin-scraper-bot"
+          git config user.email "cedadmin-scraper-bot@users.noreply.github.com"
+          git add cedadmin_data/latest cedadmin_apps.yaml
+          if git diff --cached --quiet; then
+            echo "No changes — skipping commit."
+            exit 0
+          fi
+          STAMP=$(date -u +"%Y-%m-%d_%H-%M-%SZ")
+          git commit -m "chore(cedadmin): scrape ${STAMP}"
+          git push origin HEAD:main
+
+      - name: Upload debug artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cedadmin-scraper-debug-${{ github.run_id }}
+          path: |
+            cedadmin_data/
+          if-no-files-found: ignore
+          retention-days: 14

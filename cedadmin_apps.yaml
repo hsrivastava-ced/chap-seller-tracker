@@ -1,0 +1,24 @@
+# cedadmin_apps.yaml — operator-controlled section list for the
+# CedCommerce Yii2 admin panel scraper (panels/cedcommerce_admin.py).
+#
+# Intentionally SEPARATE from apps.yaml (which is cHAP-only). The two
+# scrapers, dashboards, and access controls don't share state.
+#
+# Each marketplace card on the panel exposes multiple SECTIONS
+# (Shop Details, Order Details, Bookmarks, Refund, Analytics, …).
+# The unit of scraping is an (app_id, section_id) pair. The scraper
+# iterates the `sections:` list per app, scraping each enabled one.
+#
+# Only the (app, section) pairs you list here AND have wired up in
+# panels/cedcommerce_admin.py::SECTIONS are scraped. Everything else
+# the panel exposes upstream is ignored — operator-controlled, not
+# auto-mirrored.
+
+schema_version: 1
+
+apps:
+  - id: walmart_us
+    label: Walmart US
+    sections:
+      - id: analytics
+        enabled: true

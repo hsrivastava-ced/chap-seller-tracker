@@ -27,6 +27,10 @@ plotly>=5.20.0,<7.0.0
 pyyaml>=6.0,<7.0
 pynacl>=1.5.0,<2.0.0
 requests>=2.31.0,<3.0.0
+# lxml — pandas.read_html parser used by panels/cedcommerce_admin.py.
+# That panel returns a 35MB HTML response with a 26k-row Yii2 grid;
+# lxml parses it in ~5s vs html.parser's ~40s.
+lxml>=5.0,<7.0
 
 # Customer Intelligence — Claude-based seller-website analysis.
 # seller_profile_enricher.py calls claude-haiku-4-5 to classify
