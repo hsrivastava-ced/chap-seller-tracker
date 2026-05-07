@@ -8,37 +8,32 @@ What it does:
        in st.session_state so the rest of the app (dashboard.py, admin_ui.py)
        can branch on permissions without re-reading YAML every page.
 
-Streamlit native vs library fallback:
-    Streamlit ≥ 1.42 ships a native `st.login("google")` + `st.experimental_user`
-    that we prefer. If the runtime is older, or `st.login` isn't available
-    for any reason, we fall back to the `streamlit-oauth` library using the
-    same Google Cloud client. Callers never have to know which path ran;
-    `gate()` is the single entry point.
+Why streamlit-oauth (not native st.login):
+    Streamlit 1.56's native st.login("google") + Authlib's callback
+    handler raises MismatchingStateError on every sign-in
+    (the CSRF cookie isn't validated against the URL state). The
+    streamlit-oauth library uses a popup + postMessage flow and avoids
+    the broken cookie handshake. We pin authlib<1.7 in requirements
+    just in case anything else imports it transitively.
 
 Setup (done ONCE in Streamlit Cloud → app → Settings → Secrets):
 
     [auth]
-    redirect_uri  = "https://chap-seller-tracker.streamlit.app/oauth2callback"
-    cookie_secret = "<32+ random bytes — generate with `python -c 'import secrets; print(secrets.token_urlsafe(48))'`>"
+    redirect_uri = "https://chap-seller-tracker.streamlit.app/"
 
     [auth.google]
-    client_id           = "<from Google Cloud console>"
-    client_secret       = "<from Google Cloud console>"
-    server_metadata_url = "https://accounts.google.com/.well-known/openid-configuration"
+    client_id     = "<from Google Cloud console>"
+    client_secret = "<from Google Cloud console>"
 
-    NOTE: the provider must live in a nested `[auth.google]` table because
-    `gate()` calls `st.login("google")` (named provider). A flat `[auth]`
-    block with client_id/secret at the top level only works when calling
-    `st.login()` with no args, which we don't.
+    NOTE: for the streamlit-oauth library path, redirect_uri should be
+    the app's own URL (the popup posts the OAuth code back to the
+    parent window via postMessage; the path doesn't need to be a
+    dedicated route). Whatever value you pick MUST be added verbatim
+    to Google Cloud Console → APIs & Services → Credentials → OAuth
+    client → Authorized redirect URIs.
 
-    NOTE: `cookie_secret` MUST be set explicitly. If it's missing, Streamlit
-    generates a random one per process — and on Streamlit Cloud the app
-    reboots between Sign-in click and OAuth callback, which makes the state
-    cookie unverifiable and produces `MismatchingStateError` (CSRF Warning).
-
-    NOTE: the redirect_uri value here MUST exactly match the one registered
-    in Google Cloud Console → APIs & Services → Credentials → OAuth client
-    → Authorized redirect URIs. No trailing slash, no `~/+/` prefix.
+    NOTE: cookie_secret / server_metadata_url are NOT required by the
+    library path — they were only used by the native st.login flow.
 
 Local dev (without real Google creds):
     Set AUTH_DEV_EMAIL=hsrivastava@threecolts.com in .env before running
@@ -62,28 +57,38 @@ from roles import UserPrincipal
 def gate() -> UserPrincipal:
     """Force login and return the resolved principal.
 
-    On failure (not signed in, wrong domain, malformed role file) this
-    function calls `st.stop()` so the rest of the page never renders.
-    The caller can assume a non-None principal when `gate()` returns.
+    On failure (not signed in, wrong domain) this function calls
+    `st.stop()` so the rest of the page never renders. The caller can
+    assume a non-None principal when `gate()` returns.
+
+    The login page (when shown) calls `st.set_page_config` itself —
+    callers MUST NOT call set_page_config before invoking gate().
     """
     import streamlit as st  # local import: streamlit is heavy and the
                             # tests in this repo don't need it
 
-    # Cache principal in session_state — we only need to resolve once
-    # per user session. This also means role changes require the user
-    # to refresh; that's fine (and matches the design).
     principal = st.session_state.get("_principal")
     if principal:
         return principal
 
-    email = _resolve_email(st)
+    email = _email_from_cached_token(st)
+
+    if not email and _is_local_dev(st):
+        dev = os.getenv("AUTH_DEV_EMAIL", "").strip()
+        if dev:
+            email = dev
+
     if not email:
-        _render_login_prompt(st)
+        # Render login page (does set_page_config first, then the button).
+        # If the OAuth round-trip just completed, this also returns the token.
+        token = _render_login_and_capture_token(st)
+        if token:
+            st.session_state["_oauth_token"] = token
+            st.rerun()
         st.stop()
 
     principal = roles.principal_for(email)
     if principal is None:
-        # Valid Google sign-in, wrong domain.
         _render_domain_reject(st, email)
         st.stop()
 
@@ -92,14 +97,7 @@ def gate() -> UserPrincipal:
 
 
 def require(action: str, principal: Optional[UserPrincipal] = None) -> UserPrincipal:
-    """Assert that the current principal has permission for `action`.
-
-    Used inside pages that are already past `gate()` but want to block
-    a sub-capability. Example:
-
-        p = auth.gate()
-        auth.require("add_app", p)   # raises st.stop() if not editor+
-    """
+    """Assert that the current principal has permission for `action`."""
     import streamlit as st
     if principal is None:
         principal = st.session_state.get("_principal")
@@ -110,16 +108,7 @@ def require(action: str, principal: Optional[UserPrincipal] = None) -> UserPrinc
 
 
 def sign_out_button(st=None, *, skip_caption: bool = False):
-    """Render a small 'Sign out' button in the sidebar.
-
-    Clears the session and kicks the user back to the login screen.
-
-    `skip_caption=True` is used by pages that already render their own
-    user card (Intelligence, Dashboard) — those pages show the email
-    + role in a styled card, so the bare-text "Signed in as" caption
-    just creates visual noise above the card. When True, only the
-    Sign out button is rendered.
-    """
+    """Render a small 'Sign out' button in the sidebar."""
     if st is None:
         import streamlit as st  # noqa: F811
     principal = st.session_state.get("_principal")
@@ -134,99 +123,33 @@ def sign_out_button(st=None, *, skip_caption: bool = False):
 
 
 # --------------------------------------------------------------------
-# Internals
+# Internals — token / email resolution
 # --------------------------------------------------------------------
-def _resolve_email(st) -> Optional[str]:
-    """Resolve via streamlit-oauth (library) → local-dev env.
+def _email_from_cached_token(st) -> Optional[str]:
+    """If a token is already in session, exchange it for the user's email.
 
-    We deliberately skip Streamlit's native st.login("google"). On
-    Streamlit Cloud 1.57 + authlib ≥1.6 the native callback at
-    /~/+/oauth2callback raises MismatchingStateError on every sign-in
-    (CSRF cookie not validated against the URL state). The library
-    path uses streamlit-oauth, which keeps state in the URL/window
-    and avoids the broken cookie handshake.
+    On failure (expired/revoked token) we clear it so the user falls through
+    to the login page instead of looping on a dead session.
     """
-    # 1. Library OAuth (streamlit-oauth + Google OIDC)
-    email = _resolve_email_library(st)
-    if email:
-        return email
-
-    # 2. Local dev escape hatch (explicit env var, only if no [auth] secrets)
-    if _is_local_dev(st):
-        dev = os.getenv("AUTH_DEV_EMAIL", "").strip()
-        if dev:
-            return dev
-    return None
-
-
-def _resolve_email_native(st) -> Optional[str]:
-    """Use `st.login` + `st.user` (1.42+) if available.
-
-    Streamlit 1.42 renamed the identity attribute from `st.experimental_user`
-    to `st.user`. On 1.56 (our pinned version) only `st.user` exists, so
-    reading `experimental_user` silently returned None and trapped us in
-    a login→redirect→login loop after successful OAuth.
-    """
-    try:
-        user = getattr(st, "user", None) or getattr(st, "experimental_user", None)
-        if user is None:
-            return None
-        is_logged_in = bool(getattr(user, "is_logged_in", False))
-        if not is_logged_in:
-            # Expose st.login on the prompt screen — render_login_prompt
-            # calls it directly. Here we just report "not logged in".
-            return None
-        email = getattr(user, "email", None)
-        return email.strip() if email else None
-    except Exception:
-        return None
-
-
-def _resolve_email_library(st) -> Optional[str]:
-    """Fallback: streamlit-oauth against the same Google client.
-
-    We lazy-import so environments that don't install the package
-    still work via the native path or local-dev env var.
-    """
-    try:
-        from streamlit_oauth import OAuth2Component  # type: ignore
-    except Exception:
-        return None
-    cfg = _auth_config(st)
-    if not cfg:
-        return None
-
-    oauth = OAuth2Component(
-        client_id=cfg["client_id"],
-        client_secret=cfg["client_secret"],
-        authorize_endpoint="https://accounts.google.com/o/oauth2/v2/auth",
-        token_endpoint="https://oauth2.googleapis.com/token",
-        refresh_token_endpoint="https://oauth2.googleapis.com/token",
-        revoke_token_endpoint="https://oauth2.googleapis.com/revoke",
-    )
     token = st.session_state.get("_oauth_token")
     if not token:
-        # Render the button — user clicks, gets redirected to Google,
-        # comes back with a code, we exchange it for a token.
-        result = oauth.authorize_button(
-            "Sign in with Google",
-            redirect_uri=cfg["redirect_uri"],
-            scope="openid email profile",
-            use_container_width=True,
-        )
-        if not result or "token" not in result:
-            return None
-        token = result["token"]
-        st.session_state["_oauth_token"] = token
+        return None
+    email = _email_from_token(token)
+    if not email:
+        st.session_state.pop("_oauth_token", None)
+    return email
 
-    # Decode the id_token to pull the email. id_tokens are signed JWTs;
-    # we validate by round-tripping through Google's userinfo endpoint
-    # (simpler than carrying a JWT-verify dep).
+
+def _email_from_token(token: dict) -> Optional[str]:
+    """Round-trip the access_token through Google's userinfo endpoint."""
     import requests
+    access = (token or {}).get("access_token")
+    if not access:
+        return None
     try:
         r = requests.get(
             "https://openidconnect.googleapis.com/v1/userinfo",
-            headers={"Authorization": f"Bearer {token['access_token']}"},
+            headers={"Authorization": f"Bearer {access}"},
             timeout=8,
         )
         if r.status_code != 200:
@@ -243,16 +166,12 @@ def _resolve_email_library(st) -> Optional[str]:
 def _auth_config(st) -> Optional[dict]:
     """Return a flattened auth config dict or None if not configured.
 
-    Streamlit's native auth wants the provider in a nested table
-    ([auth.google]) while streamlit-oauth wants the client info flat.
-    We accept both shapes in secrets.toml and flatten here so callers
-    don't care:
+    Accepts either:
 
         [auth]                              [auth]
         client_id = "..."                   redirect_uri = "..."
-        client_secret = "..."               cookie_secret = "..."
-        redirect_uri = "..."        OR
-                                            [auth.google]
+        client_secret = "..."        OR
+        redirect_uri = "..."                [auth.google]
                                             client_id = "..."
                                             client_secret = "..."
     """
@@ -273,20 +192,19 @@ def _auth_config(st) -> Optional[dict]:
 
 
 def _is_local_dev(st) -> bool:
-    """Rough heuristic: no [auth] block in secrets AND we're not on Streamlit Cloud."""
+    """No [auth] block in secrets AND we're not on Streamlit Cloud."""
     if _auth_config(st):
         return False
-    # Streamlit Cloud sets STREAMLIT_SERVER_PORT + STREAMLIT_SHARING_MODE env
-    # vars; on prod we definitely should never take the local-dev branch.
     if os.getenv("STREAMLIT_SHARING_MODE"):
         return False
     return True
 
 
 # --------------------------------------------------------------------
-# Rendering helpers
+# Login page rendering — set_page_config FIRST, then everything else.
 # --------------------------------------------------------------------
-def _render_login_prompt(st) -> None:
+def _render_login_and_capture_token(st) -> Optional[dict]:
+    """Render the sign-in page and (if the popup just completed) return a token."""
     st.set_page_config(
         page_title="Sign in — cHAP Seller Tracker",
         page_icon=":lock:",
@@ -299,28 +217,64 @@ def _render_login_prompt(st) -> None:
         Sign in with your **@threecolts.com** Google account to continue.
         """
     )
-    # streamlit-oauth library path: it renders its own button (popup-based).
-    # We render the button by invoking _resolve_email_library — if the user
-    # has just completed OAuth in the popup, it returns the email and we
-    # rerun so gate() picks it up.
-    email = _resolve_email_library(st)
-    if email:
-        st.session_state["_pending_email"] = email
-        st.rerun()
+
+    cfg = _auth_config(st)
+    if not cfg:
+        # Local dev: no secrets configured. Show the env-var hint and stop.
+        if _is_local_dev(st) and not os.getenv("AUTH_DEV_EMAIL"):
+            st.info(
+                "Local dev: set `AUTH_DEV_EMAIL=you@threecolts.com` in `.env` "
+                "to skip the OAuth dance while developing."
+            )
+        else:
+            st.error(
+                "OAuth is not configured. The `[auth]` block is missing from "
+                "Streamlit secrets. See `auth.py` docstring for the expected shape."
+            )
+        return None
+
+    try:
+        from streamlit_oauth import OAuth2Component
+    except Exception:
+        st.error(
+            "The `streamlit-oauth` package is not installed. Add it to "
+            "`requirements.txt` and redeploy."
+        )
+        return None
+
+    oauth = OAuth2Component(
+        client_id=cfg["client_id"],
+        client_secret=cfg["client_secret"],
+        authorize_endpoint="https://accounts.google.com/o/oauth2/v2/auth",
+        token_endpoint="https://oauth2.googleapis.com/token",
+        refresh_token_endpoint="https://oauth2.googleapis.com/token",
+        revoke_token_endpoint="https://oauth2.googleapis.com/revoke",
+    )
+
+    result = oauth.authorize_button(
+        "Sign in with Google",
+        redirect_uri=cfg["redirect_uri"],
+        scope="openid email profile",
+        key="chap_google_signin",
+        use_container_width=True,
+    )
+
     st.caption(
         "Only @threecolts.com identities are permitted. "
         "If you need access, ask the admin (Hrithik)."
     )
 
-    # Local-dev path hint
-    if _is_local_dev(st) and not os.getenv("AUTH_DEV_EMAIL"):
-        st.info(
-            "Local dev: set `AUTH_DEV_EMAIL=you@threecolts.com` in `.env` "
-            "to skip the OAuth dance while developing."
-        )
+    if result and "token" in result:
+        return result["token"]
+    return None
 
 
 def _render_domain_reject(st, email: str) -> None:
+    st.set_page_config(
+        page_title="Access denied — cHAP Seller Tracker",
+        page_icon=":no_entry:",
+        layout="centered",
+    )
     st.error(
         f"The account `{email}` is signed in but is not on the allowed "
         f"**@{roles.ALLOWED_DOMAIN}** domain. Please sign in with a "
@@ -335,5 +289,8 @@ def _do_sign_out(st) -> None:
         st.session_state.pop(k, None)
     logout = getattr(st, "logout", None)
     if callable(logout):
-        logout()
+        try:
+            logout()
+        except Exception:
+            pass
     st.rerun()
