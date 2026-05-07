@@ -68,6 +68,7 @@ import logging
 import os
 import re
 import secrets as pysecrets
+import time
 from typing import Optional
 
 import roles
@@ -80,6 +81,19 @@ PBKDF2_ITERATIONS = 600_000
 EMAIL_RE = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 MIN_PASSWORD_LEN = 8
 
+# Idle session timeout. Sliding window — every gate() call refreshes.
+# Streamlit Cloud workers restart frequently and wipe session_state, so
+# without a cookie-backed token here every restart bounces the user
+# back to login. Cookie persists in browser; cookie value is a JWT-like
+# `email|expires_at_unix|hmac` triple signed with `cookie_secret`.
+SESSION_TTL_SECONDS = 20 * 60         # 20 minutes
+SESSION_WARN_SECONDS = 60             # show "expires in 1 min" warning
+SESSION_REFRESH_THRESHOLD_SECONDS = 5 * 60  # only re-issue cookie when
+                                            # < this much time remains,
+                                            # to avoid setting a cookie
+                                            # on every single rerun
+SESSION_COOKIE_NAME = "chap_session"
+
 
 # --------------------------------------------------------------------
 # Public entry point — call this at the top of every Streamlit page.
@@ -90,12 +104,37 @@ def gate() -> UserPrincipal:
     On failure (not signed in, wrong domain, account not approved)
     calls `st.stop()`. Callers MUST NOT call set_page_config before
     this — the login screen calls it itself.
+
+    Session lifecycle:
+      - First successful login sets a `chap_session` cookie containing
+        an HMAC-signed (email, expires_at) token. cookie_secret is
+        the signing key.
+      - Every subsequent gate() call validates the cookie. If valid
+        and the principal isn't already cached in session_state,
+        rebuild it via `roles.principal_for(email)`.
+      - If less than SESSION_REFRESH_THRESHOLD_SECONDS remain on the
+        cookie, a fresh one is issued (sliding window — active users
+        stay logged in indefinitely; idle users time out after
+        SESSION_TTL_SECONDS).
     """
-    import streamlit as st  # heavy; not needed in tests
+    import streamlit as st
 
     principal = st.session_state.get("_principal")
     if principal:
+        # Even when principal is cached, keep the cookie fresh so the
+        # next reload after a worker restart restores cleanly.
+        _maybe_refresh_session_cookie(st, principal.email)
         return principal
+
+    # Cookie-backed fast path: restore the principal across a Streamlit
+    # Cloud worker restart without re-authenticating.
+    cookie_email = _email_from_session_cookie(st)
+    if cookie_email:
+        principal = roles.principal_for(cookie_email)
+        if principal:
+            st.session_state["_principal"] = principal
+            _maybe_refresh_session_cookie(st, cookie_email)
+            return principal
 
     # Local-dev escape hatch: AUTH_DEV_EMAIL bypasses Supabase.
     if _is_local_dev(st):
@@ -122,7 +161,7 @@ def require(action: str, principal: Optional[UserPrincipal] = None) -> UserPrinc
 
 
 def sign_out_button(st=None, *, skip_caption: bool = False):
-    """Render a small 'Sign out' button in the sidebar."""
+    """Render a small 'Sign out' button + idle-timer in the sidebar."""
     if st is None:
         import streamlit as st  # noqa: F811
     principal = st.session_state.get("_principal")
@@ -132,8 +171,168 @@ def sign_out_button(st=None, *, skip_caption: bool = False):
         if not skip_caption:
             st.caption(f"Signed in as **{principal.email}**")
             st.caption(f"Role: `{principal.role}`")
+        # Idle countdown — read the cookie's expiry rather than tracking
+        # a session_state value, so worker restarts don't lose the
+        # countdown either. Updates on every Streamlit interaction
+        # (button clicks, tab switches, etc.) — there's no ambient
+        # polling. If a user stares at the screen for >20 min without
+        # interacting, their next click logs them out.
+        secs_left = _session_seconds_remaining(st)
+        if secs_left is not None:
+            mins, secs = divmod(max(0, secs_left), 60)
+            if secs_left <= SESSION_WARN_SECONDS:
+                st.warning(
+                    f"⏰ Session expires in {mins}m {secs}s — "
+                    f"any click extends it."
+                )
+            else:
+                st.caption(f"Session: {mins}m {secs}s remaining")
         if st.button("Sign out", use_container_width=True):
             _do_sign_out(st)
+
+
+# --------------------------------------------------------------------
+# Session cookie — HMAC-signed (email, expires_at) survives Streamlit
+# Cloud worker restarts so users don't bounce to login on every reload.
+# --------------------------------------------------------------------
+def _cookie_secret(st) -> Optional[str]:
+    try:
+        secret = (st.secrets.get("auth", {}) or {}).get("cookie_secret")
+    except Exception:
+        secret = None
+    if secret:
+        return secret
+    # Last-resort fallback so local dev (no [auth] block) still works.
+    # Doesn't survive process restart, but session_state shouldn't
+    # either in that case so the UX is consistent.
+    return os.getenv("CHAP_COOKIE_SECRET")
+
+
+def _make_session_token(email: str, secret: str, ttl: int = SESSION_TTL_SECONDS) -> str:
+    """`email|expires_at|hex_sig` — base64url-encoded as one string."""
+    expires_at = int(time.time()) + ttl
+    payload = f"{email.lower()}|{expires_at}"
+    sig = hmac.new(
+        secret.encode("utf-8"), payload.encode("utf-8"), hashlib.sha256,
+    ).hexdigest()[:32]
+    return _b64(f"{payload}|{sig}".encode("utf-8"))
+
+
+def _verify_session_token(token: str, secret: str) -> Optional[tuple[str, int]]:
+    """Return (email, expires_at) if the token is valid + unexpired."""
+    if not token or not secret:
+        return None
+    try:
+        raw = _b64d(token).decode("utf-8")
+        email, expires_at_s, sig = raw.rsplit("|", 2)
+        expires_at = int(expires_at_s)
+    except Exception:
+        return None
+    expected = hmac.new(
+        secret.encode("utf-8"),
+        f"{email}|{expires_at}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()[:32]
+    if not hmac.compare_digest(sig, expected):
+        return None
+    if expires_at < int(time.time()):
+        return None
+    return email, expires_at
+
+
+def _cookie_manager(st):
+    """Return a memoised CookieManager, or None if the dep isn't installed."""
+    cm = st.session_state.get("_cookie_manager")
+    if cm is not None:
+        return cm
+    try:
+        import extra_streamlit_components as stx
+    except Exception:
+        return None
+    cm = stx.CookieManager(key="chap_cookie_manager")
+    st.session_state["_cookie_manager"] = cm
+    return cm
+
+
+def _email_from_session_cookie(st) -> Optional[str]:
+    cm = _cookie_manager(st)
+    secret = _cookie_secret(st)
+    if cm is None or not secret:
+        return None
+    try:
+        token = cm.get(SESSION_COOKIE_NAME)
+    except Exception:
+        return None
+    if not token:
+        return None
+    parsed = _verify_session_token(token, secret)
+    if not parsed:
+        # Stale / forged — clear the cookie so the next gate() call
+        # cleanly falls through to the login page instead of looping
+        # on a dead token.
+        try:
+            cm.delete(SESSION_COOKIE_NAME, key="chap_cookie_clear")
+        except Exception:
+            pass
+        return None
+    return parsed[0]
+
+
+def _session_seconds_remaining(st) -> Optional[int]:
+    cm = _cookie_manager(st)
+    secret = _cookie_secret(st)
+    if cm is None or not secret:
+        return None
+    try:
+        token = cm.get(SESSION_COOKIE_NAME)
+    except Exception:
+        return None
+    parsed = _verify_session_token(token or "", secret)
+    if not parsed:
+        return None
+    return parsed[1] - int(time.time())
+
+
+def _set_session_cookie(st, email: str) -> None:
+    cm = _cookie_manager(st)
+    secret = _cookie_secret(st)
+    if cm is None or not secret:
+        return
+    token = _make_session_token(email, secret)
+    try:
+        from datetime import datetime, timezone, timedelta
+        expires = datetime.now(timezone.utc) + timedelta(seconds=SESSION_TTL_SECONDS)
+        # The CookieManager.set() signature wants a unique `key` per
+        # call so streamlit's re-run dedup doesn't collapse the write.
+        cm.set(
+            SESSION_COOKIE_NAME, token,
+            expires_at=expires,
+            key=f"chap_cookie_set_{int(time.time())}",
+        )
+    except Exception as err:
+        _LOGGER.debug(f"failed to set session cookie: {err}")
+
+
+def _maybe_refresh_session_cookie(st, email: str) -> None:
+    """Re-issue the cookie when < 5 min remain so active users stay logged
+    in indefinitely without setting a cookie on every single rerun."""
+    secs_left = _session_seconds_remaining(st)
+    if secs_left is None:
+        # No prior cookie — set one now.
+        _set_session_cookie(st, email)
+        return
+    if secs_left < SESSION_REFRESH_THRESHOLD_SECONDS:
+        _set_session_cookie(st, email)
+
+
+def _clear_session_cookie(st) -> None:
+    cm = _cookie_manager(st)
+    if cm is None:
+        return
+    try:
+        cm.delete(SESSION_COOKIE_NAME, key=f"chap_cookie_del_{int(time.time())}")
+    except Exception:
+        pass
 
 
 # --------------------------------------------------------------------
@@ -243,6 +442,7 @@ def _render_login_form(st) -> None:
 
     st.session_state["_principal"] = principal
     _supabase_update_last_login(email)
+    _set_session_cookie(st, email)
     st.rerun()
 
 
@@ -396,4 +596,5 @@ def _is_local_dev(st) -> bool:
 
 def _do_sign_out(st) -> None:
     st.session_state.pop("_principal", None)
+    _clear_session_cookie(st)
     st.rerun()

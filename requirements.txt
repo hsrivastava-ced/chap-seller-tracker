@@ -27,6 +27,12 @@ plotly>=5.20.0,<7.0.0
 pyyaml>=6.0,<7.0
 pynacl>=1.5.0,<2.0.0
 requests>=2.31.0,<3.0.0
+# Cookie-based session persistence in auth.py (sliding 20-min timeout).
+# Streamlit's session_state evaporates when its workers restart on
+# Cloud, which was bouncing every user back to the login page on
+# random reloads. extra-streamlit-components.CookieManager survives
+# the worker churn because the cookie lives in the browser.
+extra-streamlit-components>=0.1.71,<1.0.0
 
 # Customer Intelligence — Claude-based seller-website analysis.
 # seller_profile_enricher.py calls claude-haiku-4-5 to classify
