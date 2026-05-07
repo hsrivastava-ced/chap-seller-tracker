@@ -509,10 +509,19 @@ def _render_overview_tab(principal: roles.UserPrincipal):
         # str() to survive PyYAML auto-coercing unquoted ISO timestamps
         # into datetime objects (can't slice a datetime).
         added_at_str = str(a.added_at) if a.added_at else "—"
+        # Frameworks: short-form display. ["auto"] means discovery
+        # hasn't run yet (next scrape will populate). Empty list (rare)
+        # falls back to auto.
+        fw_list = list(getattr(a, "frameworks", None) or ["auto"])
+        if fw_list == ["auto"]:
+            fw_display = "auto (pending discovery)"
+        else:
+            fw_display = ", ".join(fw_list)
         rows.append({
             "App": a.label,
             "Id": a.id,
             "Status": status_label.get(a.schema_status, a.schema_status),
+            "Frameworks": fw_display,
             "Installs": "✅" if a.scrape_installs else "—",
             "Uninstalls": "✅" if a.scrape_uninstalls else "—",
             "Added by": (a.added_by or "—").split("@")[0],
@@ -1167,6 +1176,20 @@ def _commit_roles_yaml(principal, action: str):
     gh.put_file(ctx, "roles.yaml", body, msg)
 
 
+def _commit_apps_yaml(principal, action: str):
+    """Push the local apps.yaml back up to GitHub so the change
+    survives the next Streamlit Cloud redeploy. Mirror of
+    _commit_roles_yaml — same pattern, different file."""
+    try:
+        ctx = gh.context_from_streamlit(st)
+    except Exception:
+        return
+    from pathlib import Path
+    body = Path("apps.yaml").read_text(encoding="utf-8")
+    msg = f"chore(apps): {roles.audit_stamp(principal.email, action)}"
+    gh.put_file(ctx, "apps.yaml", body, msg)
+
+
 # =================================================================
 # On-demand workflow trigger — "Run scrape now" button
 # =================================================================
@@ -1412,6 +1435,126 @@ def _render_settings_tab(principal: roles.UserPrincipal) -> None:
 
     st.subheader("⏱ Scrape schedule")
     _render_schedule_section(principal)
+
+    st.divider()
+    st.subheader("🧭 Frameworks per app")
+    _render_frameworks_section(principal)
+
+
+def _render_frameworks_section(principal: roles.UserPrincipal) -> None:
+    """Edit the per-app `frameworks` list in apps.yaml.
+
+    cHAP shows a framework dropdown above the seller list (shopify /
+    prestashop / woocommerce / etc.). The scraper iterates over each
+    listed framework and merges the rows by seller_id — that's how we
+    capture every seller AND keep cHAP's per-framework plan-data
+    response (verified 2026-05-07: cHAP's "all" view drops plan
+    badges, only the per-framework views include them).
+
+    UI follows feedback_ux_style.md:
+      - One row per app, no separate page.
+      - Comma-separated input with inline validation against the
+        canonical list of known frameworks.
+      - "Re-discover" button per row resets to ["auto"] so the next
+        scrape re-reads cHAP's dropdown options.
+    """
+    KNOWN_FRAMEWORKS = (
+        "shopify", "prestashop", "woocommerce", "magento",
+        "bigcommerce", "wix", "squarespace",
+    )
+
+    st.caption(
+        "Each app's framework list controls which cHAP dropdown values "
+        "the scraper iterates. Use **auto** to let the next scrape "
+        "discover them. Comma-separate multiple frameworks (e.g. "
+        "`shopify, woocommerce`)."
+    )
+
+    apps = app_registry.all_apps()
+    if not apps:
+        st.caption("No apps configured yet.")
+        return
+
+    for a in apps:
+        current = list(getattr(a, "frameworks", None) or ["auto"])
+        current_str = ", ".join(current)
+        with st.container(border=True):
+            cols = st.columns([3, 5, 2, 2])
+            cols[0].markdown(f"**{a.label}**  \n`{a.id}`")
+            new_str = cols[1].text_input(
+                "Frameworks",
+                value=current_str,
+                key=f"frameworks_input_{a.id}",
+                label_visibility="collapsed",
+                help="Comma-separated. Use 'auto' to re-discover on next scrape.",
+            )
+            # Inline validation — the input is parsed live and the
+            # status row below shows ✓ or ⚠️ before the user clicks Save.
+            parsed = [
+                x.strip().lower() for x in (new_str or "").split(",") if x.strip()
+            ]
+            if not parsed:
+                parsed = ["auto"]
+            unknown = [
+                p for p in parsed
+                if p != "auto" and p not in KNOWN_FRAMEWORKS
+            ]
+            if unknown:
+                cols[1].caption(
+                    f"⚠️ unknown: {', '.join(unknown)} — "
+                    f"valid values: {', '.join(KNOWN_FRAMEWORKS)} or `auto`"
+                )
+            else:
+                cols[1].caption(
+                    f"✓ will scrape: {', '.join(parsed)}"
+                    if parsed != ["auto"]
+                    else "✓ will discover on next scrape"
+                )
+
+            save_disabled = bool(unknown) or (parsed == current)
+            if cols[2].button(
+                "Save",
+                key=f"frameworks_save_{a.id}",
+                disabled=save_disabled,
+                use_container_width=True,
+            ):
+                ok = app_registry.update_frameworks(a.id, parsed)
+                if ok:
+                    _commit_apps_yaml(
+                        principal,
+                        f"set frameworks={parsed} for {a.id}",
+                    )
+                    st.success(
+                        f"Updated `{a.id}` → frameworks: {', '.join(parsed)}. "
+                        f"Streamlit Cloud redeploy in ~30s; next scrape uses "
+                        f"the new list."
+                    )
+                    st.rerun()
+                else:
+                    show_warning(
+                        f"Couldn't update `{a.id}`.",
+                        hint="The app id may have been removed from "
+                             "apps.yaml in a parallel edit. Reload and retry.",
+                    )
+
+            if cols[3].button(
+                "Re-discover",
+                key=f"frameworks_redisc_{a.id}",
+                disabled=current == ["auto"],
+                use_container_width=True,
+                help="Resets to 'auto' so the next scrape re-reads cHAP's dropdown options.",
+            ):
+                ok = app_registry.update_frameworks(a.id, ["auto"])
+                if ok:
+                    _commit_apps_yaml(
+                        principal,
+                        f"reset frameworks to auto for {a.id}",
+                    )
+                    st.success(
+                        f"`{a.id}` will re-discover frameworks on the next "
+                        f"scrape."
+                    )
+                    st.rerun()
 
 
 # =================================================================
