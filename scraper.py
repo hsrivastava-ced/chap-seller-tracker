@@ -1168,12 +1168,14 @@ def _scrape_paginated_ant_table(
                 except Exception as row_dump_err:
                     logging.warning(f"   ↳ could not dump first row HTML: {row_dump_err}")
 
-        # One-shot diagnostic: dump the FIRST row's plan-cell HTML on
-        # page 1 of each app. michael + temu_eu come back 100% N/A while
-        # the live cHAP UI clearly shows real plan badges; this lets us
-        # see the actual cell structure offline without rerunning the
-        # scrape. Cheap (one cell per scrape per app) and overwritten
-        # each run so we always have a fresh sample.
+        # Diagnostic: dump up to 5 plan cells from page 1 of each app
+        # to results/debug/plan_cell_<app>.html so the file gets
+        # committed back by GitHub Actions (which only adds results/).
+        # Multiple rows in case the first ones genuinely have no plan
+        # — we want to see the structure of cells with AND without a
+        # real plan so we can tell apart "scraper miss" from "real N/A".
+        # Also log the inner_text / inner_html sizes so the diff shows
+        # up in the Actions run log even if the dump file is empty.
         if (
             prev_header_index is None
             and rows.count() > 0
@@ -1181,14 +1183,30 @@ def _scrape_paginated_ant_table(
         ):
             try:
                 p_idx = header_index["plan"]
-                first_plan_html = (
-                    rows.nth(0).locator("td").nth(p_idx).evaluate("el => el.outerHTML")
-                ) or ""
-                fname = f"debug_plan_cell_{safe_label}.html"
-                Path(fname).write_text(first_plan_html, encoding="utf-8")
+                samples_to_dump = min(5, rows.count())
+                parts: list[str] = [
+                    f"<!-- plan cell samples for {label}, "
+                    f"page {page_num}, {samples_to_dump} rows -->"
+                ]
+                for sample_i in range(samples_to_dump):
+                    plan_cell = rows.nth(sample_i).locator("td").nth(p_idx)
+                    cell_html = (
+                        plan_cell.evaluate("el => el.outerHTML")
+                    ) or ""
+                    cell_text = re.sub(
+                        r"\s+", " ", (plan_cell.inner_text() or "")
+                    ).strip()
+                    parts.append(
+                        f"\n<!-- row {sample_i}: inner_text={cell_text!r} "
+                        f"len={len(cell_html)} -->\n{cell_html}\n"
+                    )
+                debug_dir = Path("results/debug")
+                debug_dir.mkdir(parents=True, exist_ok=True)
+                fname = debug_dir / f"plan_cell_{safe_label}.html"
+                fname.write_text("\n".join(parts), encoding="utf-8")
                 logging.info(
-                    f"   ↳ plan cell HTML dumped to '{fname}' "
-                    f"({len(first_plan_html)} chars)"
+                    f"   ↳ plan cell HTML for {samples_to_dump} rows dumped "
+                    f"to '{fname}'"
                 )
             except Exception as plan_dump_err:
                 logging.debug(f"   ↳ plan cell dump skipped: {plan_dump_err}")
