@@ -553,65 +553,40 @@ def _ensure_framework_filter_is_all(page, app_id: str) -> None:
             pass
         return
 
+    # 2026-05-07: NEVER flip to 'all' even on multi-framework apps.
+    #
+    # Verified live on michael + shopify_temu_eu: when the framework
+    # filter is 'all', cHAP's seller-list response strips Plan Details
+    # data — every cell renders as plain "<td>N/A</td>" with no badge
+    # wrapper. On the same account viewing the same panel with a
+    # specific framework selected (e.g. shopify), plans render as real
+    # badges. Other optional columns (order_count, product_count) are
+    # in the response either way; only plan is filter-scoped.
+    #
+    # Trade-off: staying on the default framework on multi-framework
+    # apps means we miss sellers on the OTHER frameworks (e.g. ~32
+    # prestashop sellers on shopify_temu_eu out of 73 total). The
+    # follow-up fix is to iterate frameworks (scrape each one with its
+    # own filter selected, then merge by seller_id). For now, the
+    # default-framework view with REAL plan data is more useful for
+    # the dashboard than the all-framework view with no plan data.
     logging.info(
-        f"🧭 Flipping framework filter to 'all' for {app_id} "
-        f"(was '{target_text}', seen={seen_values}, frameworks="
-        f"{framework_options})."
+        f"🧭 framework filter: {len(framework_options)} frameworks for "
+        f"{app_id} ({framework_options}). Staying on default "
+        f"'{target_text}' instead of flipping to 'all' — cHAP's 'all' "
+        f"view drops plan data. TODO: iterate per-framework to "
+        f"capture all sellers."
     )
-    # The dropdown is already open from the probe step above — go
-    # straight to clicking the "all" option.
-    all_option = target_select.locator(
-        "li.inte-Select__Select--Item[value='all']"
-    ).first
-    if all_option.count() == 0 or not all_option.is_visible():
-        all_option = page.locator(
-            "li.inte-Select__Select--Item[value='all']:visible"
-        ).first
-    if all_option.count() == 0:
-        all_option = page.locator(
-            "li.inte-Select__Select--Item:visible:has-text('all')"
-        ).first
-    if all_option.count() == 0:
-        logging.warning("no 'all' option found inside the framework dropdown")
-        return
-
+    # Close the popup we opened above so it doesn't overlay later
+    # widgets (Customize Grid, page-size sorter).
     try:
-        all_option.click()
-    except Exception as err:
-        logging.warning(f"selecting 'all' failed: {err}")
-        return
-
-    # Wait for the table to actually finish re-rendering after the flip.
-    # cHAP shows an Ant Design loading spinner (`.ant-spin-spinning`)
-    # while it re-queries; reading pagination state before the spinner
-    # disappears yields stale counts (e.g. "1 total page" while the
-    # actual filtered total is 84 → 5 pages). We wait for the spinner
-    # to disappear, falling back to a fixed pause if no spinner ever
-    # appeared (some apps don't render one for a same-app filter flip).
-    try:
-        page.wait_for_selector(
-            ".ant-spin-spinning",
-            state="visible",
-            timeout=2500,
-        )
-        logging.debug(f"   ↳ saw loading spinner for {app_id}; waiting for it to clear.")
-        page.wait_for_selector(
-            ".ant-spin-spinning",
-            state="hidden",
-            timeout=15000,
-        )
-    except PwTimeout:
-        # No spinner observed — give the network a moment regardless.
-        page.wait_for_timeout(1500)
-
-    # Belt-and-braces: re-confirm the table has rows before we hand off
-    # to the row scraper. Empty result is non-fatal; downstream pagination
-    # already handles "no rows" cleanly.
-    try:
-        page.wait_for_selector("tr.ant-table-row", timeout=10000)
-    except PwTimeout:
+        sp_close = target_select.locator(".inte__Select--Selected").first
+        if sp_close.count():
+            sp_close.click()
+        else:
+            page.keyboard.press("Escape")
+    except Exception:
         pass
-    logging.info(f"   ↳ framework filter now 'all' for {app_id}.")
 
 
 # ---------------------------------------------------------------------------
@@ -2995,36 +2970,14 @@ def main():
                     )
                 observed_labels_by_app[app_name] = observed_labels
 
-                # Reload AFTER Customize Grid so cHAP refetches the seller
-                # table with the now-saved column preferences. Without this,
-                # newly-toggled-on columns (specifically Plan Details) come
-                # back as plain "N/A" placeholders for every row even when
-                # plans exist server-side. Other optional columns
-                # (order_count, product_count) are included in the initial
-                # payload regardless.
-                try:
-                    logging.info(
-                        f"   ↳ reloading {app_name} seller page so saved "
-                        "column prefs take effect for plan-data fetch."
-                    )
-                    page.reload(wait_until="domcontentloaded", timeout=20000)
-                    page.wait_for_selector(
-                        "tr.ant-table-row", timeout=15000
-                    )
-                    # Same spinner-aware settle the framework flip uses.
-                    try:
-                        page.wait_for_selector(
-                            ".ant-spin-spinning",
-                            state="hidden",
-                            timeout=8000,
-                        )
-                    except Exception:
-                        page.wait_for_timeout(800)
-                except Exception:
-                    logging.exception(
-                        f"post-Customize Grid reload raised for {app_name}; "
-                        "continuing — plan column may stay as N/A."
-                    )
+                # NOTE: a previous attempt added page.reload() here to try to
+                # force cHAP to refetch with Plan Details enabled — that
+                # silently REVERTED the Customize Grid toggles for ALL
+                # optional columns (order_count, product_count, etc.),
+                # leaving 254 michael rows with every optional field empty.
+                # Reverted. The plan-column issue is structural to the
+                # framework=all flip and needs to be solved upstream, not
+                # by reloading mid-flow.
 
                 # Diagnostic: identify which cHAP account the scraper is
                 # logged in as. Previous TreeWalker version returned
