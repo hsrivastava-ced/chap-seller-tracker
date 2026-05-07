@@ -2751,27 +2751,42 @@ def persist_results(
 
     # --- sellers ---
     for app_name, rows in sellers_by_app.items():
-        # Diagnostic: dump the first row's full dict + plan/order/product
-        # values right at write time. michael 2026-05-08 showed
-        # `plan='Free'` in scrape-time logs but `plan=''` in the on-disk
-        # CSV — this lets us see what state rows are in at the
-        # _write_csv call itself, vs what scrape_seller_table returned.
+        # Diagnostic: dump the FULL plan distribution + per-column
+        # populated-row counts at write time. Single-row sample isn't
+        # enough — first 5 rows were all 'Free' but the user noted
+        # "Free is one plan, there are others too". Counting all rows
+        # tells us whether plan extraction worked across the whole set.
         try:
+            from collections import Counter as _Counter
             debug_dir = Path("results/debug")
             debug_dir.mkdir(parents=True, exist_ok=True)
-            sample = rows[0] if rows else {}
-            diag = (
-                f"app: {app_name}\n"
-                f"row_count: {len(rows)}\n"
-                f"first_row.plan: {sample.get('plan')!r}\n"
-                f"first_row.order_count: {sample.get('order_count')!r}\n"
-                f"first_row.product_count: {sample.get('product_count')!r}\n"
-                f"first_row.last_sync: {sample.get('last_sync')!r}\n"
-                f"first_row keys: {list(sample.keys())}\n"
-                f"first_row repr (truncated): {repr(sample)[:1200]}\n"
+            plan_counter = _Counter((r.get("plan") or "").strip() for r in rows)
+            cols_to_check = (
+                "plan", "order_count", "product_count",
+                "failed_order_count", "steps_completed", "last_sync",
             )
+            populated = {
+                c: sum(1 for r in rows if (r.get(c) or "").strip())
+                for c in cols_to_check
+            }
+            sample = rows[0] if rows else {}
+            lines = [
+                f"app: {app_name}",
+                f"row_count: {len(rows)}",
+                "",
+                "populated counts (non-empty):",
+            ]
+            for c in cols_to_check:
+                lines.append(f"  {c}: {populated[c]}/{len(rows)}")
+            lines.append("")
+            lines.append("plan distribution (top 20):")
+            for plan, n in plan_counter.most_common(20):
+                lines.append(f"  {plan!r:30s} {n}")
+            lines.append("")
+            lines.append(f"first_row keys: {list(sample.keys())}")
+            lines.append(f"first_row repr (truncated): {repr(sample)[:1200]}")
             (debug_dir / f"persist_state_{app_name}.txt").write_text(
-                diag, encoding="utf-8"
+                "\n".join(lines) + "\n", encoding="utf-8"
             )
         except Exception as diag_err:
             logging.debug(f"persist diagnostic skipped for {app_name}: {diag_err}")
