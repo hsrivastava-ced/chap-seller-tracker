@@ -299,7 +299,7 @@ def _render_signup_form(st) -> None:
     initial_status = "approved" if auto_approved else "pending"
     approver = email if auto_approved else None
 
-    ok = _supabase_create_user(
+    ok, err_msg = _supabase_create_user(
         email=email,
         password_hash=hash_password(password),
         display_name=display_name,
@@ -307,9 +307,11 @@ def _render_signup_form(st) -> None:
         approved_by=approver,
     )
     if not ok:
-        st.error(
-            "Couldn't save your request — Supabase rejected the insert. "
-            "Try again in a minute, or contact the admin."
+        st.error(f"Couldn't save your request. Supabase said: {err_msg}")
+        st.caption(
+            "If the message mentions RLS, the `auth_users` table needs an "
+            "INSERT policy for `anon`. If it mentions missing creds, add "
+            "`SUPABASE_URL` and `SUPABASE_KEY` to Streamlit secrets."
         )
         return
 
@@ -352,10 +354,10 @@ def _supabase_create_user(
     display_name: str,
     status: str,
     approved_by: Optional[str],
-) -> bool:
+) -> tuple[bool, Optional[str]]:
     client = _supabase_client()
     if client is None:
-        return False
+        return False, "Supabase client could not be constructed."
     return client.create_auth_user(
         email=email,
         password_hash=password_hash,

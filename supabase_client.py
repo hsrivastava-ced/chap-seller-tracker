@@ -33,6 +33,40 @@ except ImportError:  # pragma: no cover — optional dep
 from config import SUPABASE_KEY, SUPABASE_URL
 
 
+def _resolve_creds_from_streamlit_secrets() -> tuple[str | None, str | None]:
+    """Pull SUPABASE_URL/KEY from Streamlit secrets when env vars are missing.
+
+    Streamlit Cloud secrets aren't automatically exposed as env vars for
+    nested keys, so config.py's os.getenv() returns None there even when
+    the operator pasted creds into Settings → Secrets. We accept either:
+
+        SUPABASE_URL = "..."          # top-level
+        SUPABASE_KEY = "..."
+
+    or:
+
+        [supabase]
+        url = "..."                   # nested
+        key = "..."
+
+    Returns (None, None) if streamlit isn't importable or no secrets match.
+    """
+    try:
+        import streamlit as st
+    except Exception:
+        return None, None
+    try:
+        # Top-level keys come through st.secrets directly.
+        url = st.secrets.get("SUPABASE_URL") or None
+        key = st.secrets.get("SUPABASE_KEY") or None
+        if url and key:
+            return url, key
+        block = dict(st.secrets.get("supabase", {}) or {})
+        return block.get("url"), block.get("key")
+    except Exception:
+        return None, None
+
+
 def _is_publishable_anon_key(key: str | None) -> bool:
     """Rough heuristic: the new-format publishable / anon keys start with
     `sb_publishable_` or the old-format JWT has `"role":"anon"` inside.
@@ -59,6 +93,13 @@ class SupabaseClient:
     ):
         self.url = url or SUPABASE_URL
         self.key = key or SUPABASE_KEY
+        # Streamlit Cloud secrets aren't always exposed as env vars
+        # (depending on whether they're top-level or nested), so fall
+        # back to reading st.secrets directly when env vars are absent.
+        if not (self.url and self.key):
+            fallback_url, fallback_key = _resolve_creds_from_streamlit_secrets()
+            self.url = self.url or fallback_url
+            self.key = self.key or fallback_key
         self._dry_run = dry_run
         self._client: Client | None = None
 
@@ -416,11 +457,21 @@ class SupabaseClient:
         display_name: str = "",
         status: str = "pending",
         approved_by: str | None = None,
-    ) -> bool:
-        """Insert a new auth_users row. Returns True on success."""
-        if self._dry_run or self._client is None:
-            logging.info(f"🧪 [dry-run] would create auth_user {email} (status={status})")
-            return False
+    ) -> tuple[bool, str | None]:
+        """Insert a new auth_users row.
+
+        Returns (ok, error_message). On success error_message is None;
+        on failure ok=False and error_message has the underlying reason
+        (RLS denial, missing creds, network, etc.) so callers can show
+        something more useful than "rejected".
+        """
+        if self._dry_run:
+            return False, (
+                "Supabase is in dry-run mode (SUPABASE_URL or SUPABASE_KEY missing). "
+                "Add them to Streamlit secrets at the top level."
+            )
+        if self._client is None:
+            return False, "Supabase client failed to initialize."
         row: dict[str, Any] = {
             "email": email.lower(),
             "password_hash": password_hash,
@@ -433,10 +484,13 @@ class SupabaseClient:
                 row["approved_by"] = approved_by
         try:
             resp = self._client.table("auth_users").insert(row).execute()
-            return bool(getattr(resp, "data", None))
+            if getattr(resp, "data", None):
+                return True, None
+            return False, "Insert returned no rows (RLS may be blocking writes)."
         except Exception as err:
-            logging.error(f"create_auth_user({email}) failed: {err}")
-            return False
+            msg = str(err) or err.__class__.__name__
+            logging.error(f"create_auth_user({email}) failed: {msg}")
+            return False, msg
 
     def list_auth_users(self, *, status: str | None = None) -> list[dict]:
         if self._dry_run or self._client is None:
