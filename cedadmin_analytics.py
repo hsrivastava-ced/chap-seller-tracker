@@ -604,6 +604,190 @@ def score_opportunity(row: dict, today: Optional[date] = None) -> int:
     return int(round(min(100.0, s)))
 
 
+def renewal_forecast(
+    normalized_rows: Iterable[dict], *, today: Optional[date] = None,
+) -> dict:
+    """Bucket currently-paying sellers by days-to-expiration.
+
+    Returns:
+        {
+          "buckets": [
+            {"label": "0-7 days", "sellers": n, "mrr": float, "min_d": 0, "max_d": 7},
+            {"label": "8-14 days", ...},
+            ...
+          ],
+          "total_at_risk_mrr": float,    # next 90 days
+          "total_at_risk_sellers": int,
+          "already_expired_count": int,  # past expiration but still install+Purchased
+        }
+    """
+    today = today or date.today()
+    bands: list[tuple[int, int, str]] = [
+        (0, 7,   "0-7 days"),
+        (8, 14,  "8-14 days"),
+        (15, 30, "15-30 days"),
+        (31, 60, "31-60 days"),
+        (61, 90, "61-90 days"),
+    ]
+    buckets = [{"label": l, "sellers": 0, "mrr": 0.0, "min_d": lo, "max_d": hi}
+               for (lo, hi, l) in bands]
+    expired = 0
+    total_mrr_at_risk = 0.0
+    total_sellers_at_risk = 0
+    for r in normalized_rows or []:
+        if (r.get("installation_status") or "").lower() != "install":
+            continue
+        if (r.get("purchase_status") or "") != "Purchased":
+            continue
+        days = r.get("_days_to_expiration")
+        if days is None:
+            continue
+        if days < 0:
+            expired += 1
+            continue
+        mrr = r.get("_mrr_usd") or 0.0
+        for bk, (lo, hi, _label) in zip(buckets, bands):
+            if lo <= days <= hi:
+                bk["sellers"] += 1
+                bk["mrr"] += mrr
+                if days <= 90:
+                    total_mrr_at_risk += mrr
+                    total_sellers_at_risk += 1
+                break
+    for bk in buckets:
+        bk["mrr"] = round(bk["mrr"], 2)
+    return {
+        "buckets": buckets,
+        "total_at_risk_mrr": round(total_mrr_at_risk, 2),
+        "total_at_risk_sellers": total_sellers_at_risk,
+        "already_expired_count": expired,
+    }
+
+
+def health_distribution(
+    normalized_rows: Iterable[dict], *, today: Optional[date] = None,
+) -> list[dict]:
+    """Histogram of score_health() across the active+paid base.
+
+    Returns 10 buckets in 10-point steps: 0-10, 11-20, …, 91-100. The
+    UI plots this as a vertical bar chart so support can spot whether
+    the paying base skews healthy (right-side) or at-risk (left-side).
+    """
+    today = today or date.today()
+    bands: list[tuple[int, int, str]] = [
+        (0, 10,    "0-10"),
+        (11, 20,   "11-20"),
+        (21, 30,   "21-30"),
+        (31, 40,   "31-40"),
+        (41, 50,   "41-50"),
+        (51, 60,   "51-60"),
+        (61, 70,   "61-70"),
+        (71, 80,   "71-80"),
+        (81, 90,   "81-90"),
+        (91, 100,  "91-100"),
+    ]
+    buckets = [
+        {"label": l, "min": lo, "max": hi, "sellers": 0, "mrr": 0.0}
+        for (lo, hi, l) in bands
+    ]
+    for r in normalized_rows or []:
+        if (r.get("installation_status") or "").lower() != "install":
+            continue
+        if (r.get("purchase_status") or "") != "Purchased":
+            continue
+        s = score_health(r, today=today)
+        for bk, (lo, hi, _label) in zip(buckets, bands):
+            if lo <= s <= hi:
+                bk["sellers"] += 1
+                bk["mrr"] += r.get("_mrr_usd") or 0.0
+                break
+    for bk in buckets:
+        bk["mrr"] = round(bk["mrr"], 2)
+    return buckets
+
+
+def failure_rate_by_segment(
+    normalized_rows: Iterable[dict],
+    *,
+    segment: str = "business_category",
+    min_sellers: int = 5,
+    min_orders_total: int = 50,
+) -> list[dict]:
+    """Per-segment failed-order rate, restricted to segments that
+    actually carry meaningful volume.
+
+    Returns rows sorted by failure rate desc:
+        [{"segment": "...", "sellers": n, "orders": int, "failed": int,
+          "failure_rate": float, "mrr": float}, ...]
+
+    `min_sellers` + `min_orders_total` filter out long-tail noise so a
+    single high-failure outlier doesn't dominate the chart.
+    """
+    agg: dict[str, dict[str, float]] = {}
+    for r in normalized_rows or []:
+        seg = (r.get(segment) or "").strip() or "(unset)"
+        b = agg.setdefault(seg, {"sellers": 0, "orders": 0, "failed": 0, "mrr": 0.0})
+        b["sellers"] += 1
+        b["orders"] += r.get("_total_orders_n", 0) or 0
+        b["failed"] += r.get("_failed_orders_n", 0) or 0
+        b["mrr"] += r.get("_mrr_usd") or 0.0
+
+    out = []
+    for seg, b in agg.items():
+        if b["sellers"] < min_sellers or b["orders"] < min_orders_total:
+            continue
+        rate = (b["failed"] / b["orders"]) if b["orders"] else 0.0
+        out.append({
+            "segment": seg,
+            "sellers": int(b["sellers"]),
+            "orders": int(b["orders"]),
+            "failed": int(b["failed"]),
+            "failure_rate": round(rate, 4),
+            "mrr": round(b["mrr"], 2),
+        })
+    out.sort(key=lambda x: -x["failure_rate"])
+    return out
+
+
+def plan_flow_pairs(
+    normalized_rows: Iterable[dict], *, top_n_pairs: int = 25,
+) -> list[dict]:
+    """Pairs of consecutive plans from the `all_plans_subscribed` history.
+
+    Each row's `all_plans_subscribed` is a `|`-separated chronological
+    list of plans the seller went through. We take adjacent pairs
+    (plan_i → plan_i+1) and count occurrences across the whole base.
+
+    Returns the top N transitions sorted by frequency:
+        [{"from": str, "to": str, "count": int}, ...]
+
+    The UI feeds these into a plotly Sankey diagram — the eye reads
+    the dominant up/down/sideways flows immediately.
+    """
+    pair_counts: Counter[tuple[str, str]] = Counter()
+    for r in normalized_rows or []:
+        history = (r.get("all_plans_subscribed") or "").strip()
+        if not history or history == "(not set)":
+            continue
+        parts = [p.strip() for p in history.split("|") if p.strip()]
+        # De-dup consecutive identical labels (panel sometimes repeats
+        # the same plan because of a renewal — that's not a "flow").
+        cleaned: list[str] = []
+        for p in parts:
+            if not cleaned or cleaned[-1] != p:
+                cleaned.append(p)
+        for a, b in zip(cleaned, cleaned[1:]):
+            # Truncate plan strings so the Sankey labels stay legible.
+            a_short = (a[:30] + "…") if len(a) > 30 else a
+            b_short = (b[:30] + "…") if len(b) > 30 else b
+            pair_counts[(a_short, b_short)] += 1
+    out = [
+        {"from": a, "to": b, "count": n}
+        for (a, b), n in pair_counts.most_common(top_n_pairs)
+    ]
+    return out
+
+
 def score_winback(row: dict, today: Optional[date] = None) -> int:
     """For License Expired. Higher = more worth a winback call."""
     if (row.get("purchase_status") or "") != "License Expired":

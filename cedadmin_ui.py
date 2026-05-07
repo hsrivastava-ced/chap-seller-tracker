@@ -512,6 +512,284 @@ def _render_dashboard_tab(rows: list[dict], today: date) -> None:
             },
         )
 
+    # =================================================================
+    # Section: Renewal forecast — what revenue is up for renewal soon?
+    # =================================================================
+    st.write("")
+    _section(
+        "Renewal forecast (next 90 days)",
+        sub="Active+paid sellers bucketed by days-to-expiration. Each bucket "
+            "is a renewal-call list with the MRR exposure attached.",
+    )
+    rf = ca.renewal_forecast(rows, today=today)
+
+    rcols = st.columns(3)
+    _kpi(
+        rcols[0],
+        label="MRR at risk · 90 days",
+        value=f"${rf['total_at_risk_mrr']:,.0f}",
+        sub=f"{rf['total_at_risk_sellers']:,} sellers",
+        color="#ef4444",
+        help_text=(
+            "Sum of monthly-equivalent revenue from currently-paying "
+            "sellers whose subscription expires within the next 90 days. "
+            "Renewing this many accounts is the single highest-leverage "
+            "support-team activity each quarter."
+        ),
+    )
+    _kpi(
+        rcols[1],
+        label="Already expired",
+        value=f"{rf['already_expired_count']:,}",
+        sub="install + Purchased + past expiry",
+        color="#f59e0b",
+        help_text=(
+            "Sellers still showing as installed AND Purchased but whose "
+            "expiration_date is already in the past. Likely a payment-"
+            "renewal lag or a churn that hasn't been finalized yet — "
+            "highest-priority winback call."
+        ),
+    )
+    _kpi(
+        rcols[2],
+        label="Renewal MRR · next 14 days",
+        value=f"${(rf['buckets'][0]['mrr'] + rf['buckets'][1]['mrr']):,.0f}",
+        sub=f"{rf['buckets'][0]['sellers'] + rf['buckets'][1]['sellers']:,} sellers",
+        color="#a78bfa",
+        help_text=(
+            "MRR concentrated in the most urgent two buckets (0-7 + 8-14 "
+            "days). This is the call list for THIS week."
+        ),
+    )
+
+    st.write("")
+    if rf["buckets"]:
+        import plotly.graph_objects as go
+        labels = [b["label"] for b in rf["buckets"]]
+        sellers = [b["sellers"] for b in rf["buckets"]]
+        mrrs = [b["mrr"] for b in rf["buckets"]]
+        fig = go.Figure(data=[
+            go.Bar(
+                x=labels, y=mrrs, name="MRR ($)",
+                marker_color=["#ef4444", "#f97316", "#f59e0b", "#fbbf24", "#fde047"],
+                text=[f"${v:,.0f}" for v in mrrs],
+                textposition="outside",
+                hovertemplate="<b>%{x}</b><br>MRR: $%{y:,.2f}<br>"
+                              "Sellers: %{customdata}<extra></extra>",
+                customdata=sellers,
+            ),
+        ])
+        fig.update_layout(
+            height=300,
+            margin=dict(t=20, b=10, l=10, r=10),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color=PALETTE["text"], size=12),
+            yaxis=dict(showgrid=False, tickprefix="$"),
+            xaxis=dict(showgrid=False),
+            showlegend=False,
+        )
+        st.plotly_chart(fig, use_container_width=True, key="dash_renewal_forecast")
+
+    # =================================================================
+    # Section: Health-score distribution
+    # =================================================================
+    st.write("")
+    _section(
+        "Health score distribution (active paid base)",
+        sub="0 = high churn risk, 100 = healthy. Skew tells you whether "
+            "your paying base is durable or fragile right now.",
+    )
+    hd = ca.health_distribution(rows, today=today)
+    if any(b["sellers"] for b in hd):
+        import plotly.graph_objects as go
+        labels = [b["label"] for b in hd]
+        sellers = [b["sellers"] for b in hd]
+        # Colour gradient from red (low score) to green (high)
+        colors = [
+            "#ef4444", "#f97316", "#f59e0b", "#fbbf24", "#facc15",
+            "#a3e635", "#84cc16", "#65a30d", "#22c55e", "#16a34a",
+        ]
+        fig = go.Figure(data=[
+            go.Bar(
+                x=labels, y=sellers,
+                marker_color=colors,
+                text=[f"{v:,}" for v in sellers],
+                textposition="outside",
+                hovertemplate="<b>Score %{x}</b><br>Sellers: %{y:,}<br>"
+                              "MRR: $%{customdata:,.0f}<extra></extra>",
+                customdata=[b["mrr"] for b in hd],
+            ),
+        ])
+        fig.update_layout(
+            height=280,
+            margin=dict(t=20, b=10, l=10, r=10),
+            paper_bgcolor="rgba(0,0,0,0)",
+            plot_bgcolor="rgba(0,0,0,0)",
+            font=dict(color=PALETTE["text"], size=12),
+            xaxis=dict(showgrid=False, title="Health score"),
+            yaxis=dict(showgrid=False, title="Sellers"),
+            showlegend=False,
+        )
+        st.plotly_chart(fig, use_container_width=True, key="dash_health_hist")
+
+    # =================================================================
+    # Section: Failure rate by business_category
+    # =================================================================
+    st.write("")
+    _section(
+        "Failure rate by business category",
+        sub="failed_orders ÷ total_orders, segments with ≥10 sellers "
+            "and ≥200 total orders. Top of the list = where to send "
+            "support before it becomes a churn driver.",
+    )
+    fr = ca.failure_rate_by_segment(
+        rows, segment="business_category",
+        min_sellers=10, min_orders_total=200,
+    )[:15]
+    if fr:
+        df = pd.DataFrame([
+            {
+                "Category": f["segment"],
+                "Sellers": f["sellers"],
+                "Orders": f["orders"],
+                "Failed": f["failed"],
+                "Failure rate": f["failure_rate"] * 100,
+                "MRR ($)": f["mrr"],
+            }
+            for f in fr
+        ])
+        st.dataframe(
+            df,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "Category": st.column_config.TextColumn(
+                    "Category",
+                    help="business_category from the seller record.",
+                ),
+                "Sellers": st.column_config.NumberColumn("Sellers", format="%d"),
+                "Orders": st.column_config.NumberColumn("Orders", format="%d"),
+                "Failed": st.column_config.NumberColumn("Failed", format="%d"),
+                "Failure rate": st.column_config.ProgressColumn(
+                    "Failure rate", min_value=0, max_value=100,
+                    format="%.1f%%",
+                    help="failed_orders ÷ total_orders for this category.",
+                ),
+                "MRR ($)": st.column_config.NumberColumn(
+                    "MRR ($)", format="$%.0f",
+                    help="Sum of monthly revenue from this category — "
+                         "shows whether high-failure categories are "
+                         "high-value or long-tail."
+                ),
+            },
+        )
+
+    # =================================================================
+    # Section: Plan-flow Sankey — upgrades / downgrades / sideways
+    # =================================================================
+    st.write("")
+    _section(
+        "Plan flow — most-frequent upgrade / downgrade transitions",
+        sub="Adjacent pairs from each seller's plan-history list. "
+            "Width of the link = how many sellers made that transition.",
+    )
+    pf = ca.plan_flow_pairs(rows, top_n_pairs=20)
+    if pf:
+        import plotly.graph_objects as go
+        # Build the Sankey index (each unique label gets an integer id).
+        labels: list[str] = []
+        idx: dict[str, int] = {}
+        for p in pf:
+            for k in (p["from"], p["to"]):
+                if k not in idx:
+                    idx[k] = len(labels)
+                    labels.append(k)
+        fig = go.Figure(data=[go.Sankey(
+            arrangement="snap",
+            node=dict(
+                label=labels,
+                pad=15, thickness=18,
+                line=dict(color=PALETTE["border"], width=0.5),
+                color=PALETTE["primary"],
+            ),
+            link=dict(
+                source=[idx[p["from"]] for p in pf],
+                target=[idx[p["to"]] for p in pf],
+                value=[p["count"] for p in pf],
+                color="rgba(99, 102, 241, 0.35)",  # primary @ 35%
+                hovertemplate=(
+                    "<b>%{source.label}</b> → "
+                    "<b>%{target.label}</b><br>"
+                    "Sellers: %{value}<extra></extra>"
+                ),
+            ),
+        )])
+        fig.update_layout(
+            height=420,
+            margin=dict(t=10, b=10, l=10, r=10),
+            paper_bgcolor="rgba(0,0,0,0)",
+            font=dict(color=PALETTE["text"], size=11),
+        )
+        st.plotly_chart(fig, use_container_width=True, key="dash_plan_sankey")
+    else:
+        st.caption(
+            "No plan-history transitions captured yet — `all_plans_subscribed` "
+            "is empty for every seller in this snapshot."
+        )
+
+    # =================================================================
+    # Section: Cohort conversion table
+    # =================================================================
+    st.write("")
+    _section(
+        "Install cohort conversion",
+        sub="Each row is sellers who installed in that month. ever_paid = "
+            "made any payment ever; still_paid = currently install + "
+            "Purchased.",
+    )
+    cohorts = ca.cohort_table(rows)
+    if cohorts:
+        # Show the most recent 18 months — older history isn't typically
+        # actionable, just historical context.
+        recent = cohorts[-18:]
+        df = pd.DataFrame(recent)
+        df = df[["cohort", "installs", "ever_paid", "ever_paid_pct",
+                 "still_paid_now", "still_paid_pct"]]
+        st.dataframe(
+            df,
+            hide_index=True,
+            use_container_width=True,
+            column_config={
+                "cohort": st.column_config.TextColumn("Install month"),
+                "installs": st.column_config.NumberColumn(
+                    "Installs", format="%d",
+                    help="Sellers who first installed during this month.",
+                ),
+                "ever_paid": st.column_config.NumberColumn(
+                    "Ever paid", format="%d",
+                    help="Of those installs, how many ever made a payment.",
+                ),
+                "ever_paid_pct": st.column_config.ProgressColumn(
+                    "Ever-paid %", min_value=0, max_value=100,
+                    format="%.1f%%",
+                    help="ever_paid ÷ installs. Higher = better top-of-funnel "
+                         "conversion for that cohort.",
+                ),
+                "still_paid_now": st.column_config.NumberColumn(
+                    "Still paid", format="%d",
+                    help="Of those installs, how many are STILL on Purchased "
+                         "status today.",
+                ),
+                "still_paid_pct": st.column_config.ProgressColumn(
+                    "Retained %", min_value=0, max_value=100,
+                    format="%.1f%%",
+                    help="still_paid_now ÷ installs. Long-run retention rate "
+                         "for the cohort.",
+                ),
+            },
+        )
+
 
 # --------------------------------------------------------------------
 # Intelligence tab
