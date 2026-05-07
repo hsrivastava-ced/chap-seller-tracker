@@ -87,6 +87,21 @@ class AppEntry:
     # app so it doesn't get double-scraped.
     shared_schedule: bool = True
 
+    # ---- frameworks (per-framework iteration, replaces always-flip-to-all) ----
+    # cHAP renders a framework dropdown above the seller list (shopify
+    # / prestashop / woocommerce / …). cHAP's "all" view STRIPS plan
+    # data from the response, so the scraper must iterate per
+    # framework and merge by seller_id rather than flipping to "all"
+    # once. See feedback_framework_filter_per_framework.md.
+    #
+    #   ["auto"]               → discover on first scrape, write back
+    #   ["shopify"]            → single-framework, one pass
+    #   ["shopify", "woocommerce"]  → two passes, merged
+    #
+    # Defaults to ["auto"] so existing apps onboard cleanly without
+    # YAML edits — the discovery pass writes the real list back.
+    frameworks: list[str] = field(default_factory=lambda: ["auto"])
+
     # ---- derived ----
     @property
     def user_env_key(self) -> str:
@@ -227,6 +242,37 @@ def add_app(entry: AppEntry, path: Optional[Path] = None) -> None:
         entry.added_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     apps.append(entry)
     save_registry(apps, path)
+
+
+def update_frameworks(
+    app_id: str,
+    frameworks: list[str],
+    *,
+    path: Optional[Path] = None,
+) -> bool:
+    """Persist a discovered/edited frameworks list back to apps.yaml.
+
+    Used by:
+      - scraper.py after auto-discovery (`frameworks: [auto]` → real list)
+      - admin_ui.py when super-admin edits the per-app framework list
+
+    Returns True if the entry was found and updated, False otherwise.
+    Empty input is treated as ["auto"] — we never persist a blank list
+    because that would skip the app entirely on the next scrape.
+    """
+    cleaned = [f.strip().lower() for f in (frameworks or []) if f and f.strip()]
+    if not cleaned:
+        cleaned = ["auto"]
+    apps = load_registry(path)
+    found = False
+    for a in apps:
+        if a.id == app_id:
+            a.frameworks = cleaned
+            found = True
+            break
+    if found:
+        save_registry(apps, path)
+    return found
 
 
 # ---------------------------------------------------------------------

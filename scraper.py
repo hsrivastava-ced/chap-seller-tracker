@@ -366,22 +366,10 @@ def login_and_prepare(page, app_id, username=None, password=None):
         )
         logging.info(f"🎉 Inside Dashboard! URL: {page.url}")
 
-        # Some apps show TWO filter dropdowns at the top of the seller
-        # page — a framework (shopify/prestashop/woocommerce/etc.) AND
-        # a target app. The framework dropdown defaults to a single
-        # value (e.g. "shopify"), so the seller list only contains
-        # rows from that one framework. Flip it to "all" so cross-
-        # framework sellers (Prestashop + Shopify on the same app)
-        # aren't silently dropped.
-        try:
-            _ensure_framework_filter_is_all(page, app_id)
-        except Exception as err:
-            # Non-fatal — many apps don't have this dropdown (only one
-            # supported framework), and the scrape should still proceed
-            # with whatever rows the default filter shows.
-            logging.debug(
-                f"framework-to-all skipped for {app_id}: {err}"
-            )
+        # Framework dropdown handling moved out of login_and_prepare.
+        # The main scrape loop now iterates per framework explicitly via
+        # iter_frameworks + set_framework_filter so plan-data per
+        # framework view is preserved (cHAP's "all" view strips it).
 
     except Exception as e:
         shot = f"error_login_{app_id}.png"
@@ -397,65 +385,32 @@ def login_and_prepare(page, app_id, username=None, password=None):
         raise
 
 
-def _ensure_framework_filter_is_all(page, app_id: str) -> None:
-    """Flip the top-of-dashboard framework dropdown to 'all' so the
-    seller list isn't silently restricted to one integration type.
+# Frameworks cHAP exposes in its top-of-dashboard left dropdown.
+# Used both to identify the framework dropdown (vs. the marketplace
+# dropdown, page-size selector, etc.) and to filter discovered
+# options down to real frameworks.
+KNOWN_FRAMEWORKS = (
+    "shopify", "prestashop", "woocommerce", "magento",
+    "bigcommerce", "wix", "squarespace",
+)
 
-    Some cHAP apps (e.g. TEMU EU, Mirakl variants) support multiple
-    source frameworks — Shopify, PrestaShop, WooCommerce, etc. The
-    admin-panel dashboard shows TWO dropdowns at the top of the seller
-    list: framework (shopify/prestashop/…/all) and target app
-    (temu/shein/…). The framework one defaults to a single value, so
-    if we leave it, we miss every seller on other frameworks.
 
-    Strategy: find the leftmost inte-Select header with a value that
-    is NOT already 'all'. Click to open. Pick the 'all' option. Wait
-    for the table to re-render. If no such dropdown exists (single-
-    framework app), no-op.
+def _find_framework_select(page):
+    """Return the framework dropdown locator + currently-selected value, or (None, None).
 
-    Kept tolerant — single PwTimeout doesn't raise. We log and
-    continue.
+    cHAP renders two `inte-formElement.inte-select` dropdowns above the
+    seller table: framework (shopify/prestashop/…) on the left, target
+    marketplace (temu/shein/…) on the right. We identify the framework
+    one by checking whether the currently-selected text is one of
+    KNOWN_FRAMEWORKS or "all".
     """
-    from playwright.sync_api import TimeoutError as PwTimeout
-
-    # The framework + app dropdowns live in the topbar (NOT main).
-    # Each dropdown is rendered as:
-    #   <div class="inte-formElement inte-select custom-select--style ...">
-    #     <span class="inte__Select--Selected">shopify</span>
-    #     ...
-    #     <ul class="inte-select-options">
-    #       <li class="inte-Select__Select--Item" value="all">all</li>
-    #       <li class="... inte-Select__Select--ItemSelected" value="shopify">shopify</li>
-    #     </ul>
-    #   </div>
-    # We scan every such select on the page, identify the one whose
-    # currently-selected text matches a known framework, and click it.
     selects = page.locator("div.inte-formElement.inte-select.custom-select--style")
     count = selects.count()
     if count == 0:
-        # Fallback: drop the custom-select--style modifier — some panels
-        # may render the same control under a slightly different class.
         selects = page.locator("div.inte-formElement.inte-select")
         count = selects.count()
-    if count == 0:
-        logging.info(
-            f"🧭 framework filter: no inte-formElement.inte-select dropdown "
-            f"on the seller page for {app_id} — nothing to flip."
-        )
-        return
-
-    seen_values: list[str] = []
-    target_select = None
-    target_text = None
-    early_all = False
-    FRAMEWORK_VALUES = {
-        "shopify", "prestashop", "woocommerce", "magento",
-        "bigcommerce", "wix", "squarespace",
-    }
     for i in range(count):
         sel = selects.nth(i)
-        # Read the visible value from the inner Selected span. Falls
-        # back to inner_text on the whole select if the span is missing.
         try:
             sp = sel.locator(".inte__Select--Selected").first
             text = (sp.inner_text() or "").strip().lower() if sp.count() else ""
@@ -463,130 +418,200 @@ def _ensure_framework_filter_is_all(page, app_id: str) -> None:
                 text = (sel.inner_text() or "").strip().lower()
         except Exception:
             continue
-        seen_values.append(text or "<empty>")
-        if text == "all":
-            early_all = True
-            # Don't break — there may still be a framework select after this
-            # (e.g. pagination per-page dropdown reads "all"). Keep scanning.
-            continue
-        if text in FRAMEWORK_VALUES:
-            target_select = sel
-            target_text = text
-            break
+        if text == "all" or text in KNOWN_FRAMEWORKS:
+            return sel, text
+    return None, None
 
-    if target_select is None:
-        if early_all:
-            logging.info(
-                f"🧭 framework filter: already on 'all' for {app_id} "
-                f"(seen={seen_values}). No flip needed."
-            )
-        else:
-            logging.info(
-                f"🧭 framework filter: no framework dropdown matched for "
-                f"{app_id} (seen={seen_values}). No flip needed."
-            )
-        return
 
-    # Open the dropdown so we can enumerate + click the 'all' option.
+def discover_frameworks(page, app_id: str) -> list[str]:
+    """Open the framework dropdown and return its options (excluding "all").
+
+    Side-effect-free if no framework dropdown exists (single-framework
+    panels). Returns [] in that case — caller treats that as a single
+    pass with no filter switching.
+
+    Logs every discovered option so cHAP UI drift shows up in the run
+    logs (e.g. if cHAP renames "shopify" to "shopify-2" we'll spot it).
+    """
+    sel, current = _find_framework_select(page)
+    if sel is None:
+        logging.info(
+            f"🧭 framework discovery: no framework dropdown for {app_id} — "
+            f"treating as single-pass scrape."
+        )
+        return []
+
     try:
-        target_select.scroll_into_view_if_needed()
-        sp_probe = target_select.locator(".inte__Select--Selected").first
+        sel.scroll_into_view_if_needed()
+        sp_probe = sel.locator(".inte__Select--Selected").first
         if sp_probe.count():
             sp_probe.click()
         else:
-            target_select.click()
+            sel.click()
         page.wait_for_selector(
             "li.inte-Select__Select--Item:visible",
             timeout=8000,
         )
     except Exception as err:
         logging.warning(
-            f"framework filter: couldn't open dropdown for {app_id} "
-            f"({err}); leaving on default."
+            f"🧭 framework discovery: couldn't open dropdown for {app_id} "
+            f"({err}); falling back to current value '{current}'."
         )
-        return
+        return [current] if current and current != "all" else []
 
-    # Log the visible options so we can confirm what cHAP exposed (useful
-    # when adding new apps like TikTok that we expect to see multiple
-    # frameworks for).
-    option_items = page.locator("li.inte-Select__Select--Item:visible")
-    option_count = option_items.count()
-    option_values: list[str] = []
-    for i in range(option_count):
+    options = page.locator("li.inte-Select__Select--Item:visible")
+    seen: list[str] = []
+    for i in range(options.count()):
         try:
-            v = (option_items.nth(i).get_attribute("value") or "").strip().lower()
+            v = (options.nth(i).get_attribute("value") or "").strip().lower()
             if v:
-                option_values.append(v)
+                seen.append(v)
         except Exception:
             continue
-    framework_options = [v for v in option_values if v in FRAMEWORK_VALUES]
+    frameworks = [v for v in seen if v in KNOWN_FRAMEWORKS]
     logging.info(
-        f"🧭 framework filter: dropdown options for {app_id} = "
-        f"{option_values} (frameworks: {framework_options})"
+        f"🧭 framework discovery for {app_id}: options={seen} "
+        f"frameworks={frameworks} (current='{current}')"
     )
 
-    # Decision: only flip to "all" when the app exposes 2+ framework
-    # options. On single-framework apps (TEMU US, SHEIN — only
-    # ['all', 'shopify']) cHAP's "all" filter returns a smaller subset
-    # of rows than the default 'shopify' — verified live 2026-04-26
-    # against TEMU US (default=84, all=20). Flipping there silently
-    # loses 76% of the data. Multi-framework apps (TEMU EU =
-    # ['all', 'shopify', 'prestashop'], TikTok future, etc.) genuinely
-    # need 'all' to capture every framework's sellers — verified same
-    # day on TEMU EU which captured 73 sellers across both frameworks.
-    if len(framework_options) < 2:
-        logging.info(
-            f"🧭 framework filter: only 1 framework ({framework_options}) "
-            f"for {app_id} — leaving on default ('{target_text}') to "
-            f"preserve row coverage. cHAP's 'all' on single-framework "
-            f"apps returns FEWER rows than the default."
-        )
-        # Close the popup we opened above so it doesn't overlay later
-        # widgets (Customize Grid, page-size sorter).
-        try:
-            sp_close = target_select.locator(".inte__Select--Selected").first
-            if sp_close.count():
-                sp_close.click()
-            else:
-                page.keyboard.press("Escape")
-        except Exception:
-            pass
-        return
-
-    # 2026-05-07: NEVER flip to 'all' even on multi-framework apps.
-    #
-    # Verified live on michael + shopify_temu_eu: when the framework
-    # filter is 'all', cHAP's seller-list response strips Plan Details
-    # data — every cell renders as plain "<td>N/A</td>" with no badge
-    # wrapper. On the same account viewing the same panel with a
-    # specific framework selected (e.g. shopify), plans render as real
-    # badges. Other optional columns (order_count, product_count) are
-    # in the response either way; only plan is filter-scoped.
-    #
-    # Trade-off: staying on the default framework on multi-framework
-    # apps means we miss sellers on the OTHER frameworks (e.g. ~32
-    # prestashop sellers on shopify_temu_eu out of 73 total). The
-    # follow-up fix is to iterate frameworks (scrape each one with its
-    # own filter selected, then merge by seller_id). For now, the
-    # default-framework view with REAL plan data is more useful for
-    # the dashboard than the all-framework view with no plan data.
-    logging.info(
-        f"🧭 framework filter: {len(framework_options)} frameworks for "
-        f"{app_id} ({framework_options}). Staying on default "
-        f"'{target_text}' instead of flipping to 'all' — cHAP's 'all' "
-        f"view drops plan data. TODO: iterate per-framework to "
-        f"capture all sellers."
-    )
-    # Close the popup we opened above so it doesn't overlay later
-    # widgets (Customize Grid, page-size sorter).
+    # Close the dropdown so it doesn't overlay later widgets.
     try:
-        sp_close = target_select.locator(".inte__Select--Selected").first
+        sp_close = sel.locator(".inte__Select--Selected").first
         if sp_close.count():
             sp_close.click()
         else:
             page.keyboard.press("Escape")
     except Exception:
         pass
+    return frameworks
+
+
+def set_framework_filter(page, framework_value: str, app_id: str) -> bool:
+    """Click the named framework option in the topbar dropdown.
+
+    No-op (returns True) if the dropdown is already on `framework_value`.
+    Returns False on a real failure (couldn't find dropdown, click failed,
+    spinner never settled). Spinner-aware wait mirrors what the old
+    flip-to-all helper did for TEMU US.
+    """
+    from playwright.sync_api import TimeoutError as PwTimeout
+
+    target = (framework_value or "").strip().lower()
+    if not target:
+        return True
+
+    sel, current = _find_framework_select(page)
+    if sel is None:
+        # Single-framework panel — nothing to set.
+        return True
+    if current == target:
+        logging.info(
+            f"🧭 framework filter already on '{target}' for {app_id}."
+        )
+        return True
+
+    try:
+        sel.scroll_into_view_if_needed()
+        sp_probe = sel.locator(".inte__Select--Selected").first
+        if sp_probe.count():
+            sp_probe.click()
+        else:
+            sel.click()
+        page.wait_for_selector(
+            "li.inte-Select__Select--Item:visible",
+            timeout=8000,
+        )
+    except Exception as err:
+        logging.warning(
+            f"🧭 framework filter: couldn't open dropdown to set "
+            f"'{target}' for {app_id} ({err})."
+        )
+        return False
+
+    option = sel.locator(
+        f"li.inte-Select__Select--Item[value='{target}']"
+    ).first
+    if option.count() == 0 or not option.is_visible():
+        option = page.locator(
+            f"li.inte-Select__Select--Item[value='{target}']:visible"
+        ).first
+    if option.count() == 0:
+        logging.warning(
+            f"🧭 framework filter: option '{target}' not in dropdown for "
+            f"{app_id} (current='{current}')."
+        )
+        try:
+            page.keyboard.press("Escape")
+        except Exception:
+            pass
+        return False
+
+    try:
+        option.click()
+    except Exception as err:
+        logging.warning(
+            f"🧭 framework filter: clicking '{target}' failed for "
+            f"{app_id}: {err}"
+        )
+        return False
+
+    # Spinner-aware settle — cHAP shows .ant-spin-spinning while it
+    # refetches with the new filter, and reading the table before the
+    # spinner clears yields stale state (e.g. wrong row count).
+    try:
+        page.wait_for_selector(
+            ".ant-spin-spinning", state="visible", timeout=2500,
+        )
+        page.wait_for_selector(
+            ".ant-spin-spinning", state="hidden", timeout=15000,
+        )
+    except PwTimeout:
+        page.wait_for_timeout(1500)
+    try:
+        page.wait_for_selector("tr.ant-table-row", timeout=10000)
+    except PwTimeout:
+        pass
+    logging.info(f"🧭 framework filter set to '{target}' for {app_id}.")
+    return True
+
+
+def iter_frameworks(page, app) -> list[str]:
+    """Decide which framework values to scrape for this app.
+
+    Source of truth is `app.frameworks` from apps.yaml:
+      - ["auto"]              → discover from cHAP, write back, return discovered list
+      - []                    → treat as single-pass (no dropdown)
+      - ["shopify"]           → single pass, no dropdown switching
+      - ["shopify", "wix"]    → multi-pass, returned in YAML order
+
+    Single-framework panels (no dropdown) always return [""] (one pass,
+    no filter switch). The empty string signals "leave the dropdown
+    alone" to the caller.
+    """
+    raw = list(getattr(app, "frameworks", None) or ["auto"])
+    if raw == ["auto"]:
+        discovered = discover_frameworks(page, app.id)
+        if not discovered:
+            return [""]  # single pass, no filter
+        # Persist the discovered list back to apps.yaml so subsequent
+        # scrapes skip the discovery click.
+        try:
+            import app_registry
+            app_registry.update_frameworks(app.id, discovered)
+            app.frameworks = discovered
+            logging.info(
+                f"🧭 wrote discovered frameworks for {app.id}: {discovered}"
+            )
+        except Exception as err:
+            logging.warning(
+                f"🧭 couldn't persist discovered frameworks for {app.id}: {err}"
+            )
+        return discovered
+
+    cleaned = [f for f in raw if f and f.strip()]
+    if not cleaned:
+        return [""]
+    return cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -2951,33 +2976,7 @@ def main():
             try:
                 login_and_prepare(page, app_id, username=user, password=pwd)
 
-                # --- Customize Grid (Phase 2.2) ---
-                # Tick every available column so optional KPIs like
-                # Order Count / Product Count land in the CSV. Non-fatal:
-                # if the widget isn't found, the scraper still runs with
-                # whatever default columns the dashboard rendered. The
-                # observed_labels sink captures the full popup label set so
-                # scrape_validator can diff it against grid_columns.yaml.
                 observed_labels: list[str] = []
-                try:
-                    customize_grid_select_all(
-                        page, app_name, observed_labels_sink=observed_labels,
-                    )
-                except Exception:
-                    logging.exception(
-                        f"Customize Grid step raised for {app_name}; "
-                        "continuing with default columns."
-                    )
-                observed_labels_by_app[app_name] = observed_labels
-
-                # NOTE: a previous attempt added page.reload() here to try to
-                # force cHAP to refetch with Plan Details enabled — that
-                # silently REVERTED the Customize Grid toggles for ALL
-                # optional columns (order_count, product_count, etc.),
-                # leaving 254 michael rows with every optional field empty.
-                # Reverted. The plan-column issue is structural to the
-                # framework=all flip and needs to be solved upstream, not
-                # by reloading mid-flow.
 
                 # Diagnostic: identify which cHAP account the scraper is
                 # logged in as. Previous TreeWalker version returned
@@ -3061,28 +3060,92 @@ def main():
                 except Exception as session_err:
                     logging.debug(f"   ↳ session diagnostic skipped: {session_err}")
 
-                # --- Page size: 20 → 100 (perf) ---
-                # Do this AFTER Customize Grid so the grid-column-sticking
-                # race (serial tick / popup re-open) has already completed
-                # against the default 20-row table. Flipping to 100 now
-                # means pagination on shein drops from ~18 pages to ~4.
-                # Non-fatal: on failure we keep the default page size and
-                # just do more page turns.
-                try:
-                    set_page_size_100(page, app_name)
-                except Exception:
-                    logging.exception(
-                        f"Page-size flip to 100 raised for {app_name}; "
-                        "continuing at default page size."
+                # --- Per-framework seller scrape (Phase 1, 2026-05-07) ---
+                # cHAP's "all" framework view strips Plan Details data
+                # from the response. To keep plan badges AND capture
+                # sellers across every framework on multi-framework
+                # apps, iterate the framework dropdown one option at a
+                # time and merge by seller_id.
+                #
+                # Single-framework panels (no dropdown / single value)
+                # do exactly one pass. iter_frameworks handles the
+                # decision and persists discovered values back to
+                # apps.yaml so subsequent scrapes skip discovery.
+                app_entry = _ar.get(app_id)
+                if app_entry is None:
+                    # Fallback for unregistered apps (e.g. legacy env).
+                    from app_registry import AppEntry as _AppEntry
+                    app_entry = _AppEntry(
+                        id=app_id, label=app_name, dropdown_value=app_id,
+                        frameworks=["auto"],
                     )
-
-                # --- Sellers ---
-                seller_trace: list = []
-                sellers = scrape_seller_table(
-                    page, app_name, trace_sink=seller_trace,
+                frameworks_to_scrape = iter_frameworks(page, app_entry)
+                logging.info(
+                    f"🧭 scrape plan for {app_name}: "
+                    f"{len(frameworks_to_scrape)} pass(es) "
+                    f"frameworks={frameworks_to_scrape!r}"
                 )
+                seller_accum: dict = {}
+                seller_trace: list = []
+                for fw_idx, fw in enumerate(frameworks_to_scrape):
+                    pass_label = f"{app_name}/{fw or '(default)'}"
+                    if fw:
+                        if not set_framework_filter(page, fw, app_name):
+                            logging.warning(
+                                f"   ↳ skipping framework '{fw}' for "
+                                f"{app_name} — couldn't set filter."
+                            )
+                            continue
+
+                    # Customize Grid + page-size: re-run per framework
+                    # because cHAP can drop column toggles when the
+                    # dropdown switches. customize_grid_select_all has
+                    # a fast-path when checkboxes are already ticked.
+                    try:
+                        customize_grid_select_all(
+                            page, app_name,
+                            observed_labels_sink=observed_labels,
+                        )
+                    except Exception:
+                        logging.exception(
+                            f"Customize Grid raised for {pass_label}; "
+                            "continuing with default columns."
+                        )
+                    try:
+                        set_page_size_100(page, app_name)
+                    except Exception:
+                        logging.exception(
+                            f"Page-size flip raised for {pass_label}; "
+                            "continuing at default page size."
+                        )
+
+                    pass_trace: list = []
+                    pass_rows = scrape_seller_table(
+                        page, app_name, trace_sink=pass_trace,
+                    )
+                    seller_trace.extend(pass_trace)
+                    logging.info(
+                        f"   ↳ framework='{fw or '(default)'}' "
+                        f"captured {len(pass_rows)} rows for {app_name}"
+                    )
+                    for row in pass_rows:
+                        sid = row.get("seller_id") or row.get("_row_key") or ""
+                        if not sid:
+                            continue
+                        # First-seen wins. If the same seller_id appears
+                        # in two framework views (rare — usually a single
+                        # store binds to one framework), the row from
+                        # the first listed framework is kept.
+                        seller_accum.setdefault(sid, row)
+
+                observed_labels_by_app[app_name] = observed_labels
+                sellers = list(seller_accum.values())
                 seller_traces[app_name] = seller_trace
-                logging.info(f"⭐ SELLERS: Found {len(sellers)} for {app_name}.")
+                logging.info(
+                    f"⭐ SELLERS: {len(sellers)} unique for {app_name} "
+                    f"(merged from {len(frameworks_to_scrape)} framework "
+                    f"pass(es))."
+                )
                 all_sellers[app_name] = sellers
                 for idx, seller in enumerate(sellers[:5], start=1):
                     logging.info(f"  [{idx}] {seller}")
