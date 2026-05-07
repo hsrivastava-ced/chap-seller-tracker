@@ -242,9 +242,14 @@ jobs:
         run: |
           git config user.name "chap-scraper-bot"
           git config user.email "chap-scraper-bot@users.noreply.github.com"
-          git add results/
+          # Also stage apps.yaml — the scraper writes discovered framework
+          # lists back to it (frameworks: ["auto"] → real list) and we
+          # want that persisted so subsequent runs skip the discovery
+          # click. Other changes to apps.yaml come from admin UI commits
+          # via the GitHub API and are harmless to re-include here.
+          git add results/ apps.yaml
           if git diff --cached --quiet; then
-            echo "No changes in results/ — skipping commit."
+            echo "No changes in results/ or apps.yaml — skipping commit."
             exit 0
           fi
           STAMP=$(date -u +"%Y-%m-%d_%H-%M-%SZ")

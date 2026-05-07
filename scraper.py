@@ -3060,12 +3060,42 @@ def main():
                 except Exception as session_err:
                     logging.debug(f"   ↳ session diagnostic skipped: {session_err}")
 
+                # --- Customize Grid: once per session BEFORE the
+                # framework loop. Verified 2026-05-07: re-running
+                # customize_grid_select_all on every framework switch
+                # broke michael (254 rows) — the table-reload triggered
+                # by switching frameworks raced with the popup-tick
+                # cycle, leaving every optional column empty. cHAP's
+                # column prefs persist across framework dropdown
+                # switches in the same session, so once-per-session is
+                # both correct and faster.
+                try:
+                    customize_grid_select_all(
+                        page, app_name,
+                        observed_labels_sink=observed_labels,
+                    )
+                except Exception:
+                    logging.exception(
+                        f"Customize Grid raised for {app_name}; "
+                        "continuing with default columns."
+                    )
+                observed_labels_by_app[app_name] = observed_labels
+
+                # Page size flip — also once per session, same reason.
+                try:
+                    set_page_size_100(page, app_name)
+                except Exception:
+                    logging.exception(
+                        f"Page-size flip raised for {app_name}; "
+                        "continuing at default page size."
+                    )
+
                 # --- Per-framework seller scrape (Phase 1, 2026-05-07) ---
-                # cHAP's "all" framework view strips Plan Details data
-                # from the response. To keep plan badges AND capture
-                # sellers across every framework on multi-framework
-                # apps, iterate the framework dropdown one option at a
-                # time and merge by seller_id.
+                # cHAP's "all" framework view strips Plan Details data.
+                # To keep plan badges AND capture sellers across every
+                # framework on multi-framework apps, iterate the
+                # framework dropdown one option at a time and merge by
+                # seller_id.
                 #
                 # Single-framework panels (no dropdown / single value)
                 # do exactly one pass. iter_frameworks handles the
@@ -3088,7 +3118,6 @@ def main():
                 seller_accum: dict = {}
                 seller_trace: list = []
                 for fw_idx, fw in enumerate(frameworks_to_scrape):
-                    pass_label = f"{app_name}/{fw or '(default)'}"
                     if fw:
                         if not set_framework_filter(page, fw, app_name):
                             logging.warning(
@@ -3096,28 +3125,6 @@ def main():
                                 f"{app_name} — couldn't set filter."
                             )
                             continue
-
-                    # Customize Grid + page-size: re-run per framework
-                    # because cHAP can drop column toggles when the
-                    # dropdown switches. customize_grid_select_all has
-                    # a fast-path when checkboxes are already ticked.
-                    try:
-                        customize_grid_select_all(
-                            page, app_name,
-                            observed_labels_sink=observed_labels,
-                        )
-                    except Exception:
-                        logging.exception(
-                            f"Customize Grid raised for {pass_label}; "
-                            "continuing with default columns."
-                        )
-                    try:
-                        set_page_size_100(page, app_name)
-                    except Exception:
-                        logging.exception(
-                            f"Page-size flip raised for {pass_label}; "
-                            "continuing at default page size."
-                        )
 
                     pass_trace: list = []
                     pass_rows = scrape_seller_table(
@@ -3138,7 +3145,6 @@ def main():
                         # the first listed framework is kept.
                         seller_accum.setdefault(sid, row)
 
-                observed_labels_by_app[app_name] = observed_labels
                 sellers = list(seller_accum.values())
                 seller_traces[app_name] = seller_trace
                 logging.info(
