@@ -201,15 +201,47 @@ def sign_out_button(st=None, *, skip_caption: bool = False):
 # write, no extra component dependency.
 # --------------------------------------------------------------------
 def _cookie_secret(st) -> Optional[str]:
-    """Signing key. `cookie_secret` from secrets.toml is recycled —
-    same byte-string used to sign session tokens."""
+    """Signing key for the URL session token.
+
+    Resolution order:
+      1. `[auth].cookie_secret` from Streamlit secrets (preferred — operator
+         sets a stable random value once and sessions survive across
+         redeploys + rotations of unrelated secrets).
+      2. `CHAP_COOKIE_SECRET` env var (local-dev convenience).
+      3. Derived from `[supabase].url + [supabase].service_role_key` —
+         deterministic per-deployment so sessions persist across reboots
+         even when the operator didn't explicitly set `cookie_secret`.
+         Trade-off: rotating the Supabase service key invalidates every
+         live session, but that's already a "force everyone to sign in
+         again" event.
+
+    The derived fallback exists because before it, a missing
+    `[auth].cookie_secret` made `_set_url_token` silently no-op, and
+    "sign in then reload → bounced to login" looked like a session-
+    persistence regression rather than missing config.
+    """
     try:
         secret = (st.secrets.get("auth", {}) or {}).get("cookie_secret")
     except Exception:
         secret = None
     if secret:
         return secret
-    return os.getenv("CHAP_COOKIE_SECRET")
+    env = os.getenv("CHAP_COOKIE_SECRET")
+    if env:
+        return env
+    # Derived fallback — stable per-deployment, no new secret required.
+    try:
+        sb = (st.secrets.get("supabase", {}) or {})
+        url = sb.get("url") or ""
+        key = sb.get("service_role_key") or sb.get("anon_key") or ""
+    except Exception:
+        url = ""
+        key = ""
+    if url and key:
+        return hashlib.sha256(
+            f"chap-cookie-v1|{url}|{key}".encode("utf-8")
+        ).hexdigest()
+    return None
 
 
 def _make_session_token(email: str, secret: str, ttl: int = SESSION_TTL_SECONDS) -> str:
