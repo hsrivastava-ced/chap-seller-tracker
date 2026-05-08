@@ -1,4 +1,5 @@
 schema_version: 1
 roles:
+  gmishra@threecolts.com: editor
   hsrivastava@threecolts.com: super_admin
   lpandey@threecolts.com: editor
