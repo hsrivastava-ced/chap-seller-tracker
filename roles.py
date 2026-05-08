@@ -153,6 +153,11 @@ def can(principal: Optional[UserPrincipal], action: str) -> bool:
             return principal.role in (EDITOR, SUPER_ADMIN)
         case "approve_schema_drift":
             return principal.role == SUPER_ADMIN
+        case "edit_seller":
+            # Per-row manual edits go through public.sellers + the
+            # manual_edits_log audit trail (sql/002_manual_edits.sql).
+            # Editors fix typos / annotations; viewers can't write.
+            return principal.role in (EDITOR, SUPER_ADMIN)
         case "see_users_tab" | "grant_role" | "revoke_role":
             return principal.role == SUPER_ADMIN
         case _:

@@ -37,7 +37,7 @@ from analytics_advanced import (
 from normalize import normalize_run_data
 from supabase_client import SupabaseClient
 from ui_errors import wrap_page
-from ui_theme import apply_shared_theme, render_theme_picker
+from ui_theme import apply_shared_theme, render_theme_picker, tc_section
 
 
 ROOT = Path(__file__).parent
@@ -487,6 +487,11 @@ def main() -> None:
 
     st.divider()
     _render_advanced_preview(principal=principal, app_key=app_key)
+
+    if roles.can(principal, "edit_seller"):
+        st.divider()
+        _render_manual_edit_section(app_key=app_key, principal=principal)
+
     st.caption(
         "Coming next: day-over-day delta (what changed since the last "
         "scrape — new installs, plan changes, failed-order spikes), "
@@ -1902,3 +1907,373 @@ def _render_delta_event_card(ev) -> None:
         + f'</div></div>',
         unsafe_allow_html=True,
     )
+
+
+# =====================================================================
+# Manual-edit section — Task #80 UI half (Supabase guard already in
+# sql/002_manual_edits.sql, primitives in supabase_client.py).
+#
+# Reads sellers from Supabase (NOT the JSON run) so manual edits stay
+# visible across scrapes — the SQL guard preserves any row with
+# manually_edited_at set, only advancing last_scraped_at on rescrape.
+# Edits are recorded via apply_manual_edit, which inserts into
+# manual_edits_log; a trigger bumps sellers.manually_edited_at
+# atomically so the lock is set the moment the audit row lands.
+# =====================================================================
+
+# Canonical seller fields the editor allows. Mirrors
+# SupabaseClient._SELLERS_CANONICAL_FIELDS — keep in sync.
+_EDITABLE_SELLER_FIELDS: tuple[str, ...] = (
+    "store_url",
+    "email",
+    "username",
+    "platforms",
+    "installed_on",
+    "action",
+    "app_type",
+    "failed_order_count",
+    "last_sync",
+    "order_count",
+    "plan",
+    "product_count",
+    "source_country",
+    "steps_completed",
+    "webhooks",
+)
+
+# Columns shown in the editor but never editable — identity + lifecycle.
+_LOCKED_SELLER_FIELDS: tuple[str, ...] = (
+    "app_name",
+    "seller_id",
+    "first_seen_at",
+    "last_scraped_at",
+    "last_scraped_run",
+    "manually_edited_at",
+)
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _fetch_sellers_for_edit(
+    app_key: str, manually_edited_only: bool, limit: int,
+) -> list[dict]:
+    """Pull sellers from Supabase for the manual-edit table.
+
+    Cached for 60s so opening / re-rendering the editor doesn't slam
+    the API. Cache is busted explicitly after a successful edit batch.
+    """
+    sb = SupabaseClient()
+    return sb.fetch_sellers(
+        app_name=app_key,
+        manually_edited_only=manually_edited_only,
+        limit=limit,
+    )
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def _fetch_recent_edits(app_key: str, limit: int) -> list[dict]:
+    sb = SupabaseClient()
+    return sb.fetch_manual_edits(app_name=app_key, limit=limit)
+
+
+def _render_manual_edit_section(
+    *, app_key: str, principal,
+) -> None:
+    """Editable Supabase-backed sellers table — gated to editor+.
+
+    Lives at the bottom of the Intelligence page so reps see leads
+    first and editors fixing data drop into this expander deliberately.
+    """
+    with st.expander(
+        f"🛠 Edit a seller record (editor+) · {display_name(app_key)}",
+        expanded=False,
+    ):
+        tc_section(
+            "Manual edits",
+            sub="Fix typos / annotate plans / correct emails. Edits "
+                "persist across future scrapes via the SQL guard — "
+                "the next scrape will keep your value, not overwrite "
+                "it. Every change is logged with editor + timestamp.",
+        )
+
+        # ---- Filter strip ---------------------------------------------
+        col_search, col_locked, col_limit = st.columns([3, 1, 1])
+        search = col_search.text_input(
+            "Search email / seller_id / store_url",
+            "",
+            key=f"manual_edit_search_{app_key}",
+            help="Substring match across the three identity fields. "
+                 "Leave blank to load the most-recently-scraped 200 sellers.",
+        ).strip().lower()
+        locked_only = col_locked.checkbox(
+            "Edited only",
+            key=f"manual_edit_locked_only_{app_key}",
+            help="Show ONLY rows with manually_edited_at set — handy "
+                 "for auditing what edits already exist for this app.",
+        )
+        limit = int(col_limit.number_input(
+            "Limit",
+            min_value=50, max_value=2000, value=200, step=50,
+            key=f"manual_edit_limit_{app_key}",
+            help="Max rows to pull from Supabase. Higher = slower but "
+                 "more searchable.",
+        ))
+
+        # ---- Data fetch ------------------------------------------------
+        try:
+            rows = _fetch_sellers_for_edit(
+                app_key=app_key,
+                manually_edited_only=locked_only,
+                limit=limit,
+            )
+        except Exception as err:
+            st.error(
+                f"Couldn't fetch sellers from Supabase: `{err}`. "
+                f"The relational `public.sellers` table is populated by "
+                f"the pipeline's `upsert_sellers_with_guard` step — "
+                f"if it's empty, run a scrape first."
+            )
+            return
+
+        if not rows:
+            st.info(
+                "No sellers in `public.sellers` for "
+                f"`{app_key}` yet. Either:\n"
+                "  • the pipeline hasn't run since `sql/002_manual_edits.sql` "
+                "was applied (run a scrape to populate the projection), or\n"
+                "  • there are no manually-edited rows AND \"Edited only\" "
+                "is checked — uncheck it."
+            )
+            return
+
+        if search:
+            rows = [
+                r for r in rows
+                if search in (
+                    (r.get("email") or "").lower()
+                    + " " + (r.get("seller_id") or "").lower()
+                    + " " + (r.get("store_url") or "").lower()
+                )
+            ]
+            if not rows:
+                st.caption("No rows match that search.")
+                return
+
+        st.caption(
+            f"Editing **{len(rows):,}** seller(s) for `{app_key}`. "
+            f"Locked columns are read-only; everything else is editable."
+        )
+
+        # Build the editor frame. Only canonical + lifecycle columns
+        # — extra_fields is too messy to surface here.
+        display_cols = list(_LOCKED_SELLER_FIELDS) + list(_EDITABLE_SELLER_FIELDS)
+        # Snapshot the original frame so we can diff against the user's
+        # edits when they hit Apply. Tuple-of-tuples for hashability so
+        # session_state survives Streamlit re-runs cleanly.
+        original_records = [
+            {c: r.get(c) for c in display_cols} for r in rows
+        ]
+        df_orig = pd.DataFrame(original_records)
+
+        # ---- Reason + Apply form --------------------------------------
+        with st.form(f"manual_edit_form_{app_key}", clear_on_submit=False):
+            reason = st.text_input(
+                "Reason for these edits (applied to ALL changes in this batch)",
+                value="",
+                key=f"manual_edit_reason_{app_key}",
+                help="Logged into manual_edits_log.reason for every cell "
+                     "you change. Be specific — future-you will thank you.",
+            )
+
+            edited = st.data_editor(
+                df_orig,
+                hide_index=True,
+                use_container_width=True,
+                num_rows="fixed",
+                disabled=list(_LOCKED_SELLER_FIELDS),
+                key=f"manual_edit_editor_{app_key}",
+                column_config={
+                    "app_name": st.column_config.TextColumn(
+                        "App", help="Read-only — the app the seller belongs to.",
+                    ),
+                    "seller_id": st.column_config.TextColumn(
+                        "Seller ID",
+                        help="Read-only — primary key with app_name.",
+                    ),
+                    "manually_edited_at": st.column_config.DatetimeColumn(
+                        "Locked at",
+                        help="Last time this row was manually edited. Non-empty "
+                             "= scraper won't overwrite data fields on next run.",
+                    ),
+                    "last_scraped_at": st.column_config.DatetimeColumn(
+                        "Last scrape",
+                        help="When the scraper last touched this row.",
+                    ),
+                    "first_seen_at": st.column_config.DatetimeColumn(
+                        "First seen",
+                        help="When this seller_id first appeared.",
+                    ),
+                    "last_scraped_run": st.column_config.TextColumn(
+                        "Last run",
+                    ),
+                    "plan": st.column_config.TextColumn(
+                        "Plan",
+                        help="Current plan name. Edit to fix scraper "
+                             "mis-reads of paid → Free, etc.",
+                    ),
+                    "order_count": st.column_config.NumberColumn(
+                        "Orders",
+                    ),
+                    "failed_order_count": st.column_config.NumberColumn(
+                        "Failed orders",
+                    ),
+                    "product_count": st.column_config.NumberColumn(
+                        "Products",
+                    ),
+                },
+            )
+
+            submitted = st.form_submit_button(
+                "💾 Apply edits",
+                type="primary",
+                use_container_width=False,
+                help="Diffs the table against the loaded snapshot and "
+                     "writes one manual_edits_log row per changed cell.",
+            )
+
+        if not submitted:
+            _render_recent_edits(app_key)
+            return
+
+        # ---- Diff + apply ---------------------------------------------
+        if not reason.strip():
+            st.warning(
+                "Please add a reason for these edits — it goes into the "
+                "audit log and helps future-you understand why."
+            )
+            _render_recent_edits(app_key)
+            return
+
+        # Compare row-by-row, cell-by-cell. Only canonical fields
+        # (editable ones) can change; locked fields are protected by
+        # st.data_editor's `disabled=` arg, so we don't need to re-gate.
+        sb = SupabaseClient()
+        applied = 0
+        failed: list[str] = []
+        for idx, orig_row in enumerate(original_records):
+            edited_row = edited.iloc[idx].to_dict()
+            for field in _EDITABLE_SELLER_FIELDS:
+                old_val = orig_row.get(field)
+                new_val = edited_row.get(field)
+                # Treat NaN / None / "" as equivalent so a touched-but-
+                # not-changed cell doesn't trigger a spurious edit.
+                if _values_equal(old_val, new_val):
+                    continue
+                try:
+                    sb.apply_manual_edit(
+                        app_name=orig_row["app_name"],
+                        seller_id=orig_row["seller_id"],
+                        field=field,
+                        new_value=_coerce_for_supabase(field, new_val),
+                        editor_email=principal.email,
+                        old_value=old_val,
+                        reason=reason.strip(),
+                    )
+                    applied += 1
+                except Exception as err:
+                    failed.append(
+                        f"{orig_row['seller_id']}.{field}: {err}"
+                    )
+
+        if applied == 0 and not failed:
+            st.info("No changes detected. Nothing to write.")
+        elif applied and not failed:
+            st.success(
+                f"✅ Applied **{applied}** edit(s). They're now locked — "
+                f"the next scrape will preserve them."
+            )
+            # Bust the cache so re-renders pull fresh data including
+            # the just-bumped manually_edited_at timestamps.
+            _fetch_sellers_for_edit.clear()
+            _fetch_recent_edits.clear()
+        else:
+            st.warning(
+                f"Applied {applied} edit(s); {len(failed)} failed:\n"
+                + "\n".join(f"  • `{f}`" for f in failed[:10])
+                + ("\n  …" if len(failed) > 10 else "")
+            )
+            _fetch_sellers_for_edit.clear()
+            _fetch_recent_edits.clear()
+
+        _render_recent_edits(app_key)
+
+
+def _values_equal(a, b) -> bool:
+    """Tolerant equality — None / NaN / empty-string are all 'unset'.
+
+    Without this, st.data_editor returning a NaN for a previously-None
+    cell would look like a change and trigger a no-op manual edit.
+    """
+    import math
+    def _norm(v):
+        if v is None:
+            return None
+        if isinstance(v, float) and math.isnan(v):
+            return None
+        if isinstance(v, str) and not v.strip():
+            return None
+        return v
+    return _norm(a) == _norm(b)
+
+
+def _coerce_for_supabase(field: str, value):
+    """Coerce a data_editor cell value back to the right Python type
+    before sending to Supabase. NumberColumn returns floats; the schema
+    wants ints for *_count. Empty strings → None so SET <field> = NULL
+    actually clears."""
+    import math
+    if value is None:
+        return None
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    if isinstance(value, str) and not value.strip():
+        return None
+    if field in ("order_count", "failed_order_count", "product_count"):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+    return value
+
+
+def _render_recent_edits(app_key: str) -> None:
+    """Audit footer — last N edits for this app, newest first."""
+    with st.expander("🕘 Recent edits (last 20)", expanded=False):
+        try:
+            edits = _fetch_recent_edits(app_key, 20)
+        except Exception as err:
+            st.caption(f"Couldn't load edits: {err}")
+            return
+        if not edits:
+            st.caption("No manual edits recorded for this app yet.")
+            return
+        df = pd.DataFrame(edits)
+        keep = [
+            c for c in (
+                "edited_at", "editor_email", "seller_id",
+                "field", "old_value", "new_value", "reason",
+            ) if c in df.columns
+        ]
+        st.dataframe(
+            df[keep], hide_index=True, use_container_width=True,
+            column_config={
+                "edited_at": st.column_config.DatetimeColumn(
+                    "When", help="UTC.",
+                ),
+                "editor_email": st.column_config.TextColumn("Who"),
+                "seller_id": st.column_config.TextColumn("Seller"),
+                "field": st.column_config.TextColumn("Field"),
+                "old_value": st.column_config.TextColumn("Old"),
+                "new_value": st.column_config.TextColumn("New"),
+                "reason": st.column_config.TextColumn("Reason"),
+            },
+        )
