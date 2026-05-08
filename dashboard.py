@@ -361,10 +361,12 @@ def _inject_css() -> None:
         margin-bottom: 0.75rem;
     }}
     .panel-title {{
-        font-size: 1rem;
+        font-size: 1.05rem;
         font-weight: 700;
         color: {PALETTE["text"]};
         margin: 0;
+        border-left: 4px solid {PALETTE["primary"]};
+        padding-left: 10px;
     }}
     .panel-sub {{
         color: {PALETTE["text_soft"]};

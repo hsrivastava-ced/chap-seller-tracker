@@ -114,6 +114,12 @@ h3, .stMarkdown h3 {{
     margin-top: 1.25rem !important;
     margin-bottom: 0.4rem !important;
 }}
+/* st.subheader-rendered h3s get the project's left-bar accent so
+   they read as proper section headers rather than just text. */
+[data-testid="stHeadingContainer"] h3 {{
+    border-left: 4px solid {PALETTE["primary"]} !important;
+    padding-left: 10px !important;
+}}
 h4, .stMarkdown h4 {{
     font-size: 0.95rem !important;
     line-height: 1.4 !important;
