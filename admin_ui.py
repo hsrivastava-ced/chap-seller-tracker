@@ -1253,6 +1253,19 @@ def _trigger_scrape_now(principal: roles.UserPrincipal) -> None:
             )
             return
 
+    try:
+        import audit
+        audit.log_action(
+            email=principal.email,
+            console="chap",
+            page="Admin",
+            action="scrape_dispatch",
+            target_type="workflow",
+            target_id="scrape-chap",
+        )
+    except Exception:
+        pass
+
     st.success(
         "Workflow dispatched. Fresh data should land in the dashboard in "
         "~3–5 minutes. Watch the GitHub Actions `scrape-chap` run for progress."

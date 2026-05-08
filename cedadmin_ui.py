@@ -1265,13 +1265,27 @@ def _render_intelligence_tab(
 
             if cedadmin_roles.can(principal.email, "export_csv"):
                 full_df = pd.DataFrame([_lead_row_summary(r, b.id, today) for r in rows_b])
-                st.download_button(
+                clicked = st.download_button(
                     f"⬇ Download {b.id}.csv ({len(rows_b):,} rows)",
                     data=full_df.to_csv(index=False).encode("utf-8"),
                     file_name=f"sql_{b.id}_{today.isoformat()}.csv",
                     mime="text/csv",
                     key=f"intel_dl_{b.id}",
                 )
+                if clicked:
+                    try:
+                        import audit
+                        audit.log_action(
+                            email=principal.email,
+                            console="cedadmin",
+                            page="Intelligence",
+                            action="csv_download",
+                            target_type="lead_bucket",
+                            target_id=b.id,
+                            details={"rows": int(len(rows_b))},
+                        )
+                    except Exception:
+                        pass
             else:
                 st.caption(
                     "📎 CSV export is editor-only. Ask a super admin to grant "
@@ -1422,13 +1436,27 @@ def _render_sellers_tab(rows: list[dict], principal: auth.UserPrincipal) -> None
 
     if cedadmin_roles.can(principal.email, "export_csv"):
         full_df = pd.DataFrame([{c: r.get(c) for c in csv_cols} for r in filtered])
-        st.download_button(
+        clicked = st.download_button(
             f"⬇ Download {len(filtered):,} sellers as CSV",
             data=full_df.to_csv(index=False).encode("utf-8"),
             file_name=f"walmart_us_sellers_{date.today().isoformat()}.csv",
             mime="text/csv",
             key="sellers_dl_filtered",
         )
+        if clicked:
+            try:
+                import audit
+                audit.log_action(
+                    email=principal.email,
+                    console="cedadmin",
+                    page="Sellers",
+                    action="csv_download",
+                    target_type="seller_table",
+                    target_id="walmart_us",
+                    details={"rows": int(len(filtered))},
+                )
+            except Exception:
+                pass
     else:
         st.caption("📎 CSV export is editor-only on cedadmin.")
 

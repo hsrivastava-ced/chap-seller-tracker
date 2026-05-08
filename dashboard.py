@@ -850,7 +850,7 @@ def _download_csv(df: pd.DataFrame, filename: str, *, label: str = "⬇ Download
     _DL_COUNTER[filename] = _DL_COUNTER.get(filename, 0) + 1
     key = f"dl_{filename}_{_DL_COUNTER[filename]}"
     try:
-        st.download_button(
+        clicked = st.download_button(
             label=label,
             data=df.to_csv(index=False).encode("utf-8"),
             file_name=filename,
@@ -858,6 +858,20 @@ def _download_csv(df: pd.DataFrame, filename: str, *, label: str = "⬇ Download
             key=key,
             use_container_width=False,
         )
+        if clicked and principal is not None:
+            try:
+                import audit
+                audit.log_action(
+                    email=principal.email,
+                    console="chap",
+                    page="Dashboard",
+                    action="csv_download",
+                    target_type="file",
+                    target_id=filename,
+                    details={"rows": int(len(df))},
+                )
+            except Exception:
+                pass
     except Exception:
         # Never let a download-button failure kill the dashboard —
         # worst case the user loses the download, not the panel.

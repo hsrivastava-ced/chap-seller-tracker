@@ -194,13 +194,27 @@ def _download_csv(
             "if you need to download."
         )
         return
-    st.download_button(
+    clicked = st.download_button(
         "⬇ Download CSV",
         data=df.to_csv(index=False).encode("utf-8"),
         file_name=filename,
         mime="text/csv",
         use_container_width=False,
     )
+    if clicked and principal is not None:
+        try:
+            import audit
+            audit.log_action(
+                email=principal.email,
+                console="chap",
+                page="Intelligence",
+                action="csv_download",
+                target_type="file",
+                target_id=filename,
+                details={"rows": int(len(df))},
+            )
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------
@@ -372,6 +386,23 @@ def main() -> None:
     app_key = _render_sidebar(available_apps, principal=principal)
     if not app_key:
         return
+
+    # Log only on app change so we don't spam activity_log on every
+    # Streamlit re-run for the same app.
+    last_app = st.session_state.get("_audit_last_app_intel")
+    if last_app != app_key:
+        try:
+            audit.log_action(
+                email=principal.email,
+                console="chap",
+                page="Intelligence",
+                action="app_filter_change",
+                target_type="app",
+                target_id=app_key,
+            )
+        except Exception:
+            pass
+        st.session_state["_audit_last_app_intel"] = app_key
 
     sellers = sellers_by_app.get(app_key, []) or []
     run_stamp = run.get("run_stamp", "unknown")
