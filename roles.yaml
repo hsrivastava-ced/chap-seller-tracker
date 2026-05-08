@@ -2,3 +2,4 @@ schema_version: 1
 roles:
   hsrivastava@threecolts.com: super_admin
   vroy@threecolts.com: editor
+  lpandey@threecolts.com: viewer
