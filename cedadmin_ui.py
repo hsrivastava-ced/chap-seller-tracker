@@ -35,6 +35,7 @@ import streamlit as st
 import auth
 import cedadmin_analytics as ca
 import cedadmin_roles
+import roles as _chap_roles  # for HARD_CODED_SUPER_ADMINS + audit_stamp
 from ui_theme import (
     PALETTE,
     apply_shared_theme,
@@ -184,16 +185,21 @@ def main() -> None:
         "section. Re-runs daily at 12:00 IST."
     )
 
-    tab_dash, tab_intel, tab_table = st.tabs(
-        ["📊 Dashboard", "🎯 Intelligence", "📋 Sellers"]
-    )
+    can_manage = cedadmin_roles.can(principal.email, "manage_grants")
+    tab_labels = ["📊 Dashboard", "🎯 Intelligence", "📋 Sellers"]
+    if can_manage:
+        tab_labels.append("🔐 Access")
+    tabs = st.tabs(tab_labels)
 
-    with tab_dash:
+    with tabs[0]:
         _render_dashboard_tab(rows, today=today, prev_rows=prev_rows)
-    with tab_intel:
+    with tabs[1]:
         _render_intelligence_tab(rows, today=today, principal=principal)
-    with tab_table:
+    with tabs[2]:
         _render_sellers_tab(rows, principal=principal)
+    if can_manage:
+        with tabs[3]:
+            _render_access_tab(principal=principal)
 
 
 # --------------------------------------------------------------------
@@ -1419,3 +1425,184 @@ def _render_sellers_tab(rows: list[dict], principal: auth.UserPrincipal) -> None
         )
     else:
         st.caption("📎 CSV export is editor-only on cedadmin.")
+
+
+# --------------------------------------------------------------------
+# Access tab — super-admin grant management for cedadmin
+# --------------------------------------------------------------------
+# Strictly separate from the cHAP Users tab in admin_ui.py. A user
+# with cHAP super_admin does NOT automatically get cedadmin access —
+# they have to be added here as well. This is per Hrithik's "separate
+# access" rule for the cedadmin panel.
+def _render_access_tab(principal: auth.UserPrincipal) -> None:
+    _section(
+        "CedCommerce admin access",
+        sub="Grants are SEPARATE from cHAP. Adding someone here gives "
+            "them visibility on this panel only — their cHAP role is "
+            "untouched, and vice-versa.",
+    )
+
+    # ---- Role legend so super admins know what they're granting ----
+    with st.expander("ℹ️  What each role can do", expanded=False):
+        st.markdown(
+            """
+            | Role | Dashboard | Intelligence | Sellers tab | CSV export | Manage grants |
+            | --- | --- | --- | --- | --- | --- |
+            | **viewer** | ✅ | ✅ | ✅ | ❌ | ❌ |
+            | **editor** | ✅ | ✅ | ✅ | ✅ | ❌ |
+            | **super_admin** | ✅ | ✅ | ✅ | ✅ | ✅ |
+
+            Hard-coded super admins (the project owner) always have
+            super_admin here as a break-glass — they cannot lock
+            themselves out by editing the YAML wrong.
+            """
+        )
+
+    # ---- Grant form ----
+    with st.form("cedadmin_grant_form", clear_on_submit=True):
+        st.markdown("**➕ Grant access**")
+        col_email, col_role = st.columns([3, 1])
+        new_email = col_email.text_input(
+            "Email",
+            placeholder="someone@threecolts.com",
+            key="cedadmin_grant_email",
+            help="Threecolts email of the user to grant. Will be lowercased.",
+        )
+        new_role = col_role.selectbox(
+            "Role",
+            options=[
+                cedadmin_roles.VIEWER,
+                cedadmin_roles.EDITOR,
+                cedadmin_roles.SUPER_ADMIN,
+            ],
+            index=0,
+            key="cedadmin_grant_role",
+            help="viewer = read-only, editor = +CSV export, super_admin = "
+                 "+ this Access tab.",
+        )
+        submit = st.form_submit_button("Grant / Update")
+        if submit:
+            try:
+                cedadmin_roles.set_grant(new_email, new_role)
+            except ValueError as e:
+                st.error(f"Invalid input: {e}")
+            except Exception as e:
+                st.error(f"Couldn't write cedadmin_roles.yaml: {e}")
+            else:
+                _commit_cedadmin_roles_yaml(
+                    principal,
+                    f"grant {new_role} to {new_email.strip().lower()}",
+                )
+                st.success(
+                    f"Granted **{new_role}** to **{new_email.strip().lower()}** "
+                    f"on cedadmin. Change is live and pushed to GitHub."
+                )
+                _load_walmart_us.clear()  # role lookups don't cache, but be safe
+                st.rerun()
+
+    st.write("")
+
+    # ---- Current grants table ----
+    st.markdown("**🗂 Current grants**")
+    grants = cedadmin_roles.list_grants()
+    hard_coded = set(_chap_roles.HARD_CODED_SUPER_ADMINS)
+
+    if not grants and not hard_coded:
+        st.caption("No grants configured.")
+        return
+
+    rows_grants: list[dict] = []
+    for email in sorted(hard_coded):
+        rows_grants.append({
+            "Email": email,
+            "Role": "super_admin",
+            "Source": "hard-coded (roles.py)",
+            "_revocable": False,
+        })
+    for email, role in grants:
+        if email in hard_coded:
+            # Already shown above with the hard-coded source.
+            continue
+        rows_grants.append({
+            "Email": email,
+            "Role": role,
+            "Source": "cedadmin_roles.yaml",
+            "_revocable": True,
+        })
+
+    df = pd.DataFrame(rows_grants)
+    st.dataframe(
+        df.drop(columns=["_revocable"]),
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "Email": st.column_config.TextColumn("Email"),
+            "Role": st.column_config.TextColumn(
+                "Role",
+                help="super_admin > editor > viewer.",
+            ),
+            "Source": st.column_config.TextColumn(
+                "Source",
+                help="Where the grant comes from. hard-coded entries can't "
+                     "be revoked from the UI — edit roles.py for that.",
+            ),
+        },
+    )
+
+    # ---- Per-row revoke (revocable rows only) ----
+    revocable = [r for r in rows_grants if r["_revocable"]]
+    if revocable:
+        st.markdown("**Revoke a grant**")
+        col_select, col_btn = st.columns([3, 1])
+        target = col_select.selectbox(
+            "Email to revoke",
+            options=[r["Email"] for r in revocable],
+            key="cedadmin_revoke_target",
+            help="Removes the email from cedadmin_roles.yaml. They will lose "
+                 "cedadmin access on next page load. Their cHAP role is "
+                 "unaffected.",
+        )
+        if col_btn.button(
+            "🗑 Revoke", key="cedadmin_revoke_btn",
+            type="primary", use_container_width=True,
+        ):
+            if target in hard_coded:
+                st.error(
+                    f"`{target}` is hard-coded in roles.py and can't be "
+                    f"revoked from the UI."
+                )
+            else:
+                removed = cedadmin_roles.revoke_grant(target)
+                if removed:
+                    _commit_cedadmin_roles_yaml(
+                        principal, f"revoke {target}",
+                    )
+                    st.success(f"Revoked cedadmin access for **{target}**.")
+                    _load_walmart_us.clear()
+                    st.rerun()
+                else:
+                    st.warning(f"`{target}` wasn't in cedadmin_roles.yaml.")
+
+
+def _commit_cedadmin_roles_yaml(
+    principal: auth.UserPrincipal, action: str,
+) -> None:
+    """Push cedadmin_roles.yaml back up to GitHub so the live Streamlit
+    Cloud deploy picks it up. Mirror of admin_ui._commit_roles_yaml,
+    but writing to a different file. Local-dev (no [github] secrets)
+    silently no-ops — the file is still updated on disk."""
+    try:
+        import github_secret_updater as gh
+        ctx = gh.context_from_streamlit(st)
+    except Exception:
+        return
+    try:
+        body = Path("cedadmin_roles.yaml").read_text(encoding="utf-8")
+        msg = f"chore(cedadmin-roles): {_chap_roles.audit_stamp(principal.email, action)}"
+        gh.put_file(ctx, "cedadmin_roles.yaml", body, msg)
+    except Exception as e:
+        st.warning(
+            f"Local change saved, but couldn't commit to GitHub: {e}. "
+            f"The change will be lost on the next Streamlit Cloud redeploy "
+            f"unless someone commits cedadmin_roles.yaml manually."
+        )

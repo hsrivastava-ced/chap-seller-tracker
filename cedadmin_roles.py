@@ -81,3 +81,46 @@ def list_grants(*, path: Optional[Path] = None) -> list[tuple[str, str]]:
         _load(path).items(),
         key=lambda x: (-_ORDER.get(x[1], 0), x[0]),
     )
+
+
+def _save(grants: dict[str, str], *, path: Optional[Path] = None) -> None:
+    p = Path(path) if path else _DEFAULT_PATH
+    import yaml
+    payload = {"schema_version": 1, "roles": dict(sorted(grants.items()))}
+    p.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+
+def set_grant(
+    email: str, role: str, *, path: Optional[Path] = None,
+) -> None:
+    """Grant `email` the given cedadmin role. Overwrites any existing.
+
+    Validates the role against {super_admin, editor, viewer} and the
+    email against a basic shape check. Doesn't touch hard-coded super
+    admins (they're always super_admin via roles.HARD_CODED_SUPER_ADMINS).
+    """
+    if role not in (SUPER_ADMIN, EDITOR, VIEWER):
+        raise ValueError(f"unknown role '{role}'")
+    e = (email or "").strip().lower()
+    if "@" not in e or "." not in e:
+        raise ValueError(f"invalid email '{email}'")
+    grants = _load(path)
+    grants[e] = role
+    _save(grants, path=path)
+
+
+def revoke_grant(email: str, *, path: Optional[Path] = None) -> bool:
+    """Remove `email` from cedadmin_roles.yaml. Returns True if removed.
+
+    Hard-coded super admins (in `roles.HARD_CODED_SUPER_ADMINS`) cannot
+    be revoked from this file — they retain access via the override
+    in role_for(). The caller should check + warn before calling this
+    with a hard-coded email.
+    """
+    e = (email or "").strip().lower()
+    grants = _load(path)
+    if e in grants:
+        del grants[e]
+        _save(grants, path=path)
+        return True
+    return False
