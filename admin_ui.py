@@ -144,6 +144,12 @@ def main():
     principal = auth.gate()
     auth.require("see_admin_tab", principal)
 
+    import audit
+    audit.heartbeat(
+        principal.email, console="chap", page="Admin",
+        user_agent=audit.current_user_agent(st),
+    )
+
     st.set_page_config(page_title="Admin — cHAP Seller Tracker", page_icon=":gear:", layout="wide")
     apply_shared_theme()  # same sidebar / button look as Dashboard
 

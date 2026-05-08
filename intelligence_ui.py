@@ -332,6 +332,12 @@ def main() -> None:
     principal = auth.gate()
     auth.require("view_dashboard", principal)
 
+    import audit
+    audit.heartbeat(
+        principal.email, console="chap", page="Intelligence",
+        user_agent=audit.current_user_agent(st),
+    )
+
     st.set_page_config(
         page_title="Customer Intelligence — cHAP",
         page_icon="🎯",
@@ -2179,6 +2185,25 @@ def _render_manual_edit_section(
                         reason=reason.strip(),
                     )
                     applied += 1
+                    try:
+                        import audit
+                        audit.log_action(
+                            email=principal.email,
+                            console="chap",
+                            page="Intelligence",
+                            action="manual_edit",
+                            target_type="seller",
+                            target_id=str(orig_row.get("seller_id")),
+                            details={
+                                "app_name": orig_row.get("app_name"),
+                                "field": field,
+                                "old": str(old_val) if old_val is not None else None,
+                                "new": str(new_val) if new_val is not None else None,
+                                "reason": reason.strip(),
+                            },
+                        )
+                    except Exception:
+                        pass
                 except Exception as err:
                     failed.append(
                         f"{orig_row['seller_id']}.{field}: {err}"

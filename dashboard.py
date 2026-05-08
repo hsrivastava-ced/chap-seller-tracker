@@ -1954,6 +1954,12 @@ def main() -> None:
     principal = auth.gate()
     auth.require("view_dashboard", principal)
 
+    import audit
+    audit.heartbeat(
+        principal.email, console="chap", page="Dashboard",
+        user_agent=audit.current_user_agent(st),
+    )
+
     st.set_page_config(
         page_title="cHAP Seller Tracker",
         page_icon="📊",

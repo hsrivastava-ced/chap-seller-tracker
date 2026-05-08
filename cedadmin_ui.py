@@ -139,6 +139,12 @@ def _gate() -> auth.UserPrincipal:
 def main() -> None:
     principal = _gate()
 
+    import audit
+    audit.heartbeat(
+        principal.email, console="cedadmin", page="CedAdmin",
+        user_agent=audit.current_user_agent(st),
+    )
+
     st.set_page_config(
         page_title="CedCommerce Admin — Walmart Analytics",
         page_icon="🛒",
@@ -1493,6 +1499,19 @@ def _render_access_tab(principal: auth.UserPrincipal) -> None:
                     principal,
                     f"grant {new_role} to {new_email.strip().lower()}",
                 )
+                try:
+                    import audit
+                    audit.log_action(
+                        email=principal.email,
+                        console="cedadmin",
+                        page="Access",
+                        action="grant_role",
+                        target_type="user",
+                        target_id=new_email.strip().lower(),
+                        details={"role": new_role},
+                    )
+                except Exception:
+                    pass
                 st.success(
                     f"Granted **{new_role}** to **{new_email.strip().lower()}** "
                     f"on cedadmin. Change is live and pushed to GitHub."
@@ -1577,6 +1596,18 @@ def _render_access_tab(principal: auth.UserPrincipal) -> None:
                     _commit_cedadmin_roles_yaml(
                         principal, f"revoke {target}",
                     )
+                    try:
+                        import audit
+                        audit.log_action(
+                            email=principal.email,
+                            console="cedadmin",
+                            page="Access",
+                            action="revoke_role",
+                            target_type="user",
+                            target_id=target,
+                        )
+                    except Exception:
+                        pass
                     st.success(f"Revoked cedadmin access for **{target}**.")
                     _load_walmart_us.clear()
                     st.rerun()

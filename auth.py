@@ -423,6 +423,18 @@ def _render_login_form(st) -> None:
     st.session_state["_principal"] = principal
     _supabase_update_last_login(email)
     _set_url_token(st, email)
+    # Audit trail — best-effort, swallow failures so a flaky Supabase
+    # doesn't block login.
+    try:
+        import audit
+        audit.log_login(
+            email,
+            ip=audit.current_ip(st),
+            user_agent=audit.current_user_agent(st),
+            console=st.session_state.get("_audit_console", "chap"),
+        )
+    except Exception:
+        pass
     st.rerun()
 
 
