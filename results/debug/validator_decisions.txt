@@ -1,3 +1,35 @@
+=== shopify_temu / sellers → OK ===
+  - customize_grid: ok
+      · Observed 11 column options in Customize Grid.
+      · Required: 4 (missing: 0)
+      · Unexpected extras: 0
+  - pagination: ok
+  - row_count_sellers: ok
+      · Current sellers: 83 rows.
+      · Previous sellers: 83 rows. Drop: 0.0% (soft=20%, hard=50%).
+
+=== shopify_temu / uninstalls → OK ===
+  - pagination: ok
+  - row_count_uninstalls: ok
+      · Current uninstalls: 118 rows.
+      · Previous uninstalls: 118 rows. Drop: 0.0% (soft=20%, hard=50%).
+
+=== shein / sellers → OK ===
+  - customize_grid: ok
+      · Observed 12 column options in Customize Grid.
+      · Required: 4 (missing: 0)
+      · Unexpected extras: 0
+  - pagination: ok
+  - row_count_sellers: ok
+      · Current sellers: 345 rows.
+      · Previous sellers: 345 rows. Drop: 0.0% (soft=20%, hard=50%).
+
+=== shein / uninstalls → OK ===
+  - pagination: ok
+  - row_count_uninstalls: ok
+      · Current uninstalls: 327 rows.
+      · Previous uninstalls: 327 rows. Drop: 0.0% (soft=20%, hard=50%).
+
 === shopify_temu_eu / sellers → OK ===
   - customize_grid: ok
       · Observed 11 column options in Customize Grid.
@@ -6,11 +38,28 @@
   - pagination: ok
   - row_count_sellers: ok
       · Current sellers: 69 rows.
-      · Previous sellers: 73 rows. Drop: 5.5% (soft=20%, hard=50%).
+      · Previous sellers: 69 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shopify_temu_eu / uninstalls → OK ===
   - pagination: ok
   - row_count_uninstalls: ok
       · Current uninstalls: 131 rows.
       · Previous uninstalls: 131 rows. Drop: 0.0% (soft=20%, hard=50%).
+
+=== shein_woocommerce / sellers → OK ===
+  - customize_grid: ok
+      · Observed 11 column options in Customize Grid.
+      · Required: 4 (missing: 0)
+      · Unexpected extras: 0
+  - pagination: ok
+  - row_count_sellers: ok
+      · Current sellers: 42 rows.
+      · Previous sellers: 42 rows. Drop: 0.0% (soft=20%, hard=50%).
+
+=== shein_woocommerce / uninstalls → OK ===
+  - pagination: ok
+      · No pagination trace captured.
+  - row_count_uninstalls: ok
+      · Current uninstalls: 0 rows.
+      · No previous row count available for comparison — skipping drop check.
 
