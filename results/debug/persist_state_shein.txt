@@ -1,18 +1,18 @@
 app: shein
-row_count: 345
+row_count: 344
 
 populated counts (non-empty):
-  plan: 345/345
-  order_count: 345/345
-  product_count: 345/345
-  failed_order_count: 345/345
-  steps_completed: 345/345
-  last_sync: 0/345
+  plan: 344/344
+  order_count: 344/344
+  product_count: 344/344
+  failed_order_count: 344/344
+  steps_completed: 344/344
+  last_sync: 0/344
 
 plan distribution (top 20):
-  'N/A'                          223
-  'Starter'                      79
-  'Basic'                        19
+  'N/A'                          222
+  'Starter'                      78
+  'Basic'                        20
   'Plus'                         5
   'Standard'                     5
   'Beginner'                     2
@@ -29,4 +29,4 @@ plan distribution (top 20):
   'Product Sync'                 1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '69f1010c3e9ef56f8f060842', 'store_url': 'www.vysn.com', 'username': 'senditures.myshopify.com', 'email': 'admin@vysn.com', 'platforms': 'Shopify Shein', 'installed_on': '28/04/2026', 'app_type': 'Custom App', 'source_country': 'United States', 'order_count': '0', 'product_count': '1780727', 'failed_order_count': '0', 'steps_completed': '3', 'plan': 'Basic', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '69f1010c3e9ef56f8f060842', 'store_url': 'www.vysn.com', 'username': 'senditures.myshopify.com', 'email': 'admin@vysn.com', 'platforms': 'Shopify Shein', 'installed_on': '28/04/2026', 'app_type': 'Custom App', 'source_country': 'United States', 'order_count': '0', 'product_count': '1782133', 'failed_order_count': '0', 'steps_completed': '3', 'plan': 'Basic', 'last_sync': '', 'webhooks': 'View', 'action': ''}
