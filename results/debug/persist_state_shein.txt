@@ -1,24 +1,32 @@
 app: shein
-row_count: 120
+row_count: 344
 
 populated counts (non-empty):
-  plan: 120/120
-  order_count: 120/120
-  product_count: 120/120
-  failed_order_count: 120/120
-  steps_completed: 120/120
-  last_sync: 0/120
+  plan: 344/344
+  order_count: 344/344
+  product_count: 344/344
+  failed_order_count: 344/344
+  steps_completed: 344/344
+  last_sync: 0/344
 
 plan distribution (top 20):
-  'N/A'                          67
-  'Starter'                      33
-  'Basic'                        10
-  'Standard'                     4
-  'Plus'                         2
+  'N/A'                          223
+  'Starter'                      78
+  'Basic'                        19
+  'Plus'                         5
+  'Standard'                     5
+  'Beginner'                     2
+  'Enterprise Starter'           2
+  'Custom plan 380'              1
   'Enterprise Plus'              1
   'Combo with Tiktok Plan 300'   1
   'Enterprise Basic'             1
-  'Enterprise Starter'           1
+  'Discounted Plan 999'          1
+  'Combo with Tiktok Plan 250'   1
+  'Custom plan 349'              1
+  'Discounted Plan 870'          1
+  'Custom plan 8000'             1
+  'Product Sync'                 1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '69f1010c3e9ef56f8f060842', 'store_url': 'www.vysn.com', 'username': 'senditures.myshopify.com', 'email': 'admin@vysn.com', 'platforms': 'Shopify Shein', 'installed_on': '28/04/2026', 'app_type': 'Custom App', 'source_country': 'United States', 'order_count': '0', 'product_count': '1780476', 'failed_order_count': '0', 'steps_completed': '3', 'plan': 'Basic', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '69f1010c3e9ef56f8f060842', 'store_url': 'www.vysn.com', 'username': 'senditures.myshopify.com', 'email': 'admin@vysn.com', 'platforms': 'Shopify Shein', 'installed_on': '28/04/2026', 'app_type': 'Custom App', 'source_country': 'United States', 'order_count': '0', 'product_count': '1778832', 'failed_order_count': '0', 'steps_completed': '3', 'plan': 'Basic', 'last_sync': '', 'webhooks': 'View', 'action': ''}

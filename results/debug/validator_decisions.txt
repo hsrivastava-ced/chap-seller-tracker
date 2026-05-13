@@ -14,22 +14,23 @@
       · Current uninstalls: 120 rows.
       · Previous uninstalls: 120 rows. Drop: 0.0% (soft=20%, hard=50%).
 
-=== shein / sellers → BLOCKED ===
+=== shein / sellers → OK ===
   - customize_grid: ok
       · Observed 12 column options in Customize Grid.
       · Required: 4 (missing: 0)
       · Unexpected extras: 0
   - pagination: ok
-  - row_count_sellers: blocked
-      · Current sellers: 120 rows.
-      · Previous sellers: 344 rows. Drop: 65.1% (soft=20%, hard=50%).
-      → Row count dropped >50% vs previous run. Likely a silent login/landing failure — keep last-good CSV.
+  - row_count_sellers: ok
+      · Current sellers: 344 rows.
+      · Previous sellers: 344 rows. Drop: 0.0% (soft=20%, hard=50%).
 
-=== shein / uninstalls → OK ===
+=== shein / uninstalls → BLOCKED ===
   - pagination: ok
-  - row_count_uninstalls: ok
-      · Current uninstalls: 329 rows.
-      · Previous uninstalls: 329 rows. Drop: 0.0% (soft=20%, hard=50%).
+      · No pagination trace captured.
+  - row_count_uninstalls: blocked
+      · Current uninstalls: 0 rows.
+      · Previous uninstalls: 329 rows. Drop: 100.0% (soft=20%, hard=50%).
+      → Row count dropped >50% vs previous run. Likely a silent login/landing failure — keep last-good CSV.
 
 === shopify_temu_eu / sellers → OK ===
   - customize_grid: ok
