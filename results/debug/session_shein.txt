@@ -1,7 +1,7 @@
 app: shein
 url: https://app-v2-frontend.cifapps.com/panel/68271f967f7947780c0fc2fc/seller
 title: common-home-admin-panel
-all_emails (anywhere): ['schauhan@threecolts.com', 'qmahdi@threecolts.com']
+all_emails (anywhere): ['salisiddiqui@threecolts.com', 'schauhan@threecolts.com', 'qmahdi@threecolts.com']
 cookies: ['=(0 chars)']
 
 --- localStorage ---
@@ -22,12 +22,12 @@ cookies: ['=(0 chars)']
   {
     "key": "d732b89e609f8f262b7e9b08b303b7d5",
     "len": 62,
-    "preview": "Thu May 14 2026 20:16:08 GMT+0000 (Coordinated Universal Time)"
+    "preview": "Fri May 15 2026 09:32:34 GMT+0000 (Coordinated Universal Time)"
   },
   {
     "key": "bf01f56bbacff9dd496a8dd516562b29",
     "len": 915,
-    "preview": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJ1c2VyX2lkIjoiNjgyNzFmOTY3Zjc5NDc3ODBjMGZjMmZjIiwicm9sZSI6ImJkYSIsImV4cCI6MTc3ODc5MzM2NywiaXNzIjoiaHR0cHM6XC9cL2FwcHMuY2VkY29tbWVyY2UuY29tIiwidG9rZW5faWQiOiI2YTA"
+    "preview": "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJ1c2VyX2lkIjoiNjgyNzFmOTY3Zjc5NDc3ODBjMGZjMmZjIiwicm9sZSI6ImJkYSIsImV4cCI6MTc3ODg0MTE1MiwiaXNzIjoiaHR0cHM6XC9cL2FwcHMuY2VkY29tbWVyY2UuY29tIiwidG9rZW5faWQiOiI2YTA"
   },
   {
     "key": "62390ea4803b32611ab0fb71baa44f03",

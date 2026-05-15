@@ -1,32 +1,28 @@
 app: shein
-row_count: 343
+row_count: 244
 
 populated counts (non-empty):
-  plan: 343/343
-  order_count: 343/343
-  product_count: 343/343
-  failed_order_count: 343/343
-  steps_completed: 343/343
-  last_sync: 0/343
+  plan: 244/244
+  order_count: 244/244
+  product_count: 244/244
+  failed_order_count: 244/244
+  steps_completed: 244/244
+  last_sync: 0/244
 
 plan distribution (top 20):
-  'N/A'                          223
-  'Starter'                      77
-  'Basic'                        19
-  'Plus'                         5
-  'Standard'                     5
+  'N/A'                          150
+  'Starter'                      61
+  'Basic'                        15
+  'Plus'                         4
+  'Standard'                     4
   'Beginner'                     2
   'Enterprise Starter'           2
   'Custom plan 380'              1
   'Enterprise Plus'              1
   'Combo with Tiktok Plan 300'   1
   'Enterprise Basic'             1
-  'Discounted Plan 999'          1
-  'Combo with Tiktok Plan 250'   1
-  'Custom plan 349'              1
-  'Discounted Plan 870'          1
   'Custom plan 8000'             1
   'Product Sync'                 1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '69f1010c3e9ef56f8f060842', 'store_url': 'www.vysn.com', 'username': 'senditures.myshopify.com', 'email': 'admin@vysn.com', 'platforms': 'Shopify Shein', 'installed_on': '28/04/2026', 'app_type': 'Custom App', 'source_country': 'United States', 'order_count': '0', 'product_count': '1798471', 'failed_order_count': '0', 'steps_completed': '3', 'plan': 'Basic', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a01cd7cde47c859550d4e82', 'store_url': 'shein-test-gx4xr2ft.myshopify.com', 'username': 'shein-test-gx4xr2ft.myshopify.com', 'email': 'salisiddiqui@threecolts.com', 'platforms': 'Shopify Shein', 'installed_on': '11/05/2026', 'app_type': 'Custom App', 'source_country': 'United States', 'order_count': '0', 'product_count': '15', 'failed_order_count': '0', 'steps_completed': '3', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}
