@@ -1,13 +1,13 @@
 app: shopify_temu_eu
-row_count: 69
+row_count: 70
 
 populated counts (non-empty):
-  plan: 69/69
-  order_count: 69/69
-  product_count: 69/69
-  failed_order_count: 69/69
-  steps_completed: 69/69
-  last_sync: 0/69
+  plan: 70/70
+  order_count: 70/70
+  product_count: 70/70
+  failed_order_count: 70/70
+  steps_completed: 70/70
+  last_sync: 0/70
 
 plan distribution (top 20):
   'N/A'                          41
@@ -18,6 +18,7 @@ plan distribution (top 20):
   'Standard'                     2
   'Elite Yearly'                 1
   'Custom Yearly'                1
+  'Trial'                        1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
 first_row repr (truncated): {'seller_id': '698326738af344e6960a9302', 'store_url': 'testshop-beans.myshopify.com', 'username': 'avishwakrma@threecolts.com', 'email': 'avishwakrma@threecolts.com', 'platforms': 'Shopify Temu', 'installed_on': '04/02/2026', 'app_type': '', 'source_country': 'United Kingdom', 'order_count': '11', 'product_count': '10', 'failed_order_count': '11', 'steps_completed': '0', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}
