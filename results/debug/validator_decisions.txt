@@ -22,7 +22,7 @@
   - pagination: ok
   - row_count_sellers: ok
       · Current sellers: 344 rows.
-      · Previous sellers: 244 rows. Drop: 0.0% (soft=20%, hard=50%).
+      · Previous sellers: 344 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shein / uninstalls → OK ===
   - pagination: ok
@@ -38,7 +38,7 @@
   - pagination: ok
   - row_count_sellers: ok
       · Current sellers: 70 rows.
-      · Previous sellers: 69 rows. Drop: 0.0% (soft=20%, hard=50%).
+      · Previous sellers: 70 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shopify_temu_eu / uninstalls → OK ===
   - pagination: ok
