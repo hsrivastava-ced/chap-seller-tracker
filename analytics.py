@@ -308,9 +308,32 @@ def render_markdown_report(report: dict[str, Any]) -> str:
     keep this terse — the full detail lives in Supabase and the JSON run
     snapshot on disk."""
     t = report["totals"]
+    # Heuristic: if EVERY current seller looks like a new install AND
+    # NOTHING churned, the previous-snapshot baseline almost certainly
+    # came back empty (RLS / push failure / first run). Surface the
+    # marker in the report itself so a reader doesn't draw growth
+    # conclusions from a degenerate diff.
+    stale_diff = (
+        t["previous_sellers"] == 0
+        and t["current_sellers"] > 0
+        and t["new_installs"] == t["current_sellers"]
+        and t["churned_sellers"] == 0
+    )
     lines = [
         f"# Seller Tracker — {report['run_stamp']}",
         "",
+    ]
+    if stale_diff:
+        lines.extend([
+            "> ⚠️  **Stale diff** — previous-snapshot baseline was empty, "
+            "so every current seller looks 'new' and the churn/growth "
+            "numbers below are NOT real growth. Likely cause: Supabase "
+            "snapshot reads are returning 0 rows (RLS or anon key). "
+            "Check the CI log for the `_load_previous_from_supabase` "
+            "diagnostic lines.",
+            "",
+        ])
+    lines.extend([
         "## Totals",
         f"- Active sellers (all apps): **{t['current_sellers']}** "
         f"(Δ vs previous: {t['current_sellers'] - t['previous_sellers']:+d})",
@@ -320,7 +343,7 @@ def render_markdown_report(report: dict[str, Any]) -> str:
         f"- New uninstalls: **{t['new_uninstalls']}**",
         f"- Churn rate: **{t['churn_rate']:.2%}**",
         "",
-    ]
+    ])
     for app, data in report["apps"].items():
         c = data["sellers"]["counts"]
         u = data["uninstalls"]["counts"]

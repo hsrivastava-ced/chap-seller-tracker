@@ -80,26 +80,38 @@ def _load_run_json(run_stamp: str) -> dict[str, Any]:
 def _load_previous_from_supabase(
     client: SupabaseClient,
     current_stamp: str,
+    *,
+    apps: list[str] | None = None,
 ) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
     """Return (previous_sellers_by_app, previous_uninstalls_by_app) from
     the most recent snapshot in Supabase whose run_stamp != current_stamp.
 
-    We fetch the 2 most recent rows per (app, kind); the newer one is the
-    "current" we just pushed, so we pick index 1 for "previous". If only
-    1 row exists (first run ever), returns empty dicts — analytics treats
-    everyone as new.
+    `apps` defaults to the union of apps in apps.yaml — passing the list
+    explicitly (from this run's actually-scraped app keys) is preferred
+    so we never silently skip an app that was onboarded after this file
+    was last touched.
+
+    Logs a one-line diagnostic per (app, kind) showing rows fetched +
+    rows picked — without this it's impossible to tell from CI logs
+    whether the diff baseline came back empty because pushes were
+    blocked (RLS / anon key) or because it's a genuinely-first run.
     """
     prev_sellers: dict[str, list[dict]] = {}
     prev_unins: dict[str, list[dict]] = {}
 
-    # We iterate per-app so we get sane results when apps are added/
-    # removed. Fetching `limit=2` globally would mix apps and give us a
-    # garbage "previous".
-    for app in ("shopify_temu", "shein", "shopify_temu_eu"):
+    if apps is None:
+        apps = _apps_from_yaml() or [
+            "shopify_temu", "shein", "shopify_temu_eu", "shein_woocommerce",
+        ]
+
+    total_rows_seen = 0
+    total_buckets_filled = 0
+    for app in apps:
         for kind, bucket in (("sellers", prev_sellers), ("uninstalls", prev_unins)):
             rows = client.fetch_latest_snapshots(
-                kind=kind, app_name=app, limit=2
+                kind=kind, app_name=app, limit=2,
             )
+            total_rows_seen += len(rows)
             # Skip the row that matches the run we just pushed.
             picked = next(
                 (r for r in rows if r.get("run_stamp") != current_stamp),
@@ -107,7 +119,57 @@ def _load_previous_from_supabase(
             )
             if picked:
                 bucket[app] = picked.get("raw_data") or []
+                if bucket[app]:
+                    total_buckets_filled += 1
+            logging.info(
+                f"⏮  previous {kind:>10} for {app:<22}: "
+                f"fetched {len(rows)} row(s), "
+                f"picked={picked is not None}, "
+                f"raw_rows={(len(picked.get('raw_data') or []) if picked else 0)}"
+            )
+
+    if total_rows_seen == 0 and not client.dry_run:
+        logging.warning(
+            "⚠️  Supabase returned ZERO previous-snapshot rows across "
+            "all (app, kind) pairs. Diff vs previous will treat every "
+            "current row as a new install, every previous row as "
+            "uninstalled — bogus deltas. Likely causes (most → least): "
+            "(1) SUPABASE_KEY is the anon key and snapshots-table RLS "
+            "blocks anonymous reads — switch to a service_role key; "
+            "(2) the snapshots table is empty because pushes have been "
+            "failing silently (check 'Wrote N/M snapshot row(s)' line "
+            "above this in the log)."
+        )
+    elif total_buckets_filled == 0 and not client.dry_run:
+        logging.warning(
+            "⚠️  Fetched %d previous-snapshot row(s) but ZERO of them "
+            "had usable raw_data — diff will treat everyone as new. "
+            "Inspect public.snapshots in Supabase: the rows likely have "
+            "raw_data = null because earlier push_snapshot calls only "
+            "wrote metadata.",
+            total_rows_seen,
+        )
+    else:
+        logging.info(
+            f"📚 Loaded previous snapshots: {total_buckets_filled} "
+            f"non-empty (app, kind) bucket(s) from {total_rows_seen} "
+            f"fetched row(s)."
+        )
+
     return prev_sellers, prev_unins
+
+
+def _apps_from_yaml() -> list[str]:
+    """Read app ids from apps.yaml, in declaration order. Returns [] on
+    any failure (caller falls back to a hardcoded list)."""
+    try:
+        import yaml
+        with open(Path(__file__).parent / "apps.yaml", "r") as fh:
+            doc = yaml.safe_load(fh) or {}
+        return [a["id"] for a in (doc.get("apps") or []) if a.get("id")]
+    except Exception as err:
+        logging.debug(f"_apps_from_yaml failed: {err}")
+        return []
 
 
 # ---------------------------------------------------------------------
@@ -252,7 +314,12 @@ def run_pipeline(
             logging.warning(f"Could not load disk previous: {err}")
     elif not dry_run:
         prev_sellers, prev_unins = _load_previous_from_supabase(
-            client, current_stamp
+            client, current_stamp,
+            # Pass the apps we actually scraped so an app onboarded after
+            # this file was last touched still gets its diff baseline.
+            apps=sorted(
+                set(sellers_by_app.keys()) | set(uninstalls_by_app.keys())
+            ),
         )
 
     # 4. Normalise + compute deltas + KPIs.
