@@ -145,13 +145,25 @@ jobs:
               if ref:
                   required.extend([f"{ref}_USER", f"{ref}_PASS"])
 
+          # Optional keys — included if present as individual secrets OR
+          # in the CREDS bundle. NOT in `required` (workflow doesn't fail
+          # if absent), but unpacking them is critical: without
+          # SUPABASE_URL / SUPABASE_KEY in $GITHUB_ENV the pipeline
+          # silently runs in dry-run mode — snapshots never get pushed,
+          # diff baseline stays empty, reports show '+all new / 0
+          # churned' run after run.
+          optional = ["SUPABASE_URL", "SUPABASE_KEY"]
+
           # Start with whatever is in individual repo secrets.
-          unpacked = {k: data[k] for k in required if data.get(k)}
+          unpacked = {k: data[k] for k in required + optional if data.get(k)}
 
           # Legacy fallback: fill any still-missing keys from a CREDS
           # bundle if it exists. Harmless once everything is migrated to
-          # individual secrets — the bundle just won't be parsed.
-          if any(k not in unpacked for k in required):
+          # individual secrets — the bundle just won't be parsed. We
+          # also fall back when an OPTIONAL key is missing (Supabase)
+          # so older setups that kept SUPABASE_URL/KEY in the bundle
+          # still get them propagated.
+          if any(k not in unpacked for k in required + optional):
               creds = data.get("CREDS") or ""
               if creds.strip():
                   line_re = re.compile(
@@ -175,6 +187,14 @@ jobs:
               print(f"::error::Missing required secrets: {', '.join(missing)}")
               print("::error::Add each one under Settings → Secrets and variables → Actions, or re-run the admin UI 'Add new app' form for the affected app(s).")
               sys.exit(1)
+
+          # Optional keys: warn but don't fail. SUPABASE_* missing means
+          # the pipeline degrades to dry-run — scrape + commit still
+          # works, but snapshots/metrics never reach Supabase and the
+          # diff vs previous shows everyone as new on every run.
+          missing_optional = [k for k in optional if not unpacked.get(k)]
+          if missing_optional:
+              print(f"::warning::Missing optional secrets: {', '.join(missing_optional)}. Supabase push will be skipped — diff-vs-previous will show degenerate '+all new' deltas. Add these under Settings → Secrets and variables → Actions to restore snapshot history.")
 
           # Write to $GITHUB_ENV as multiline heredocs so any password
           # character round-trips intact.
