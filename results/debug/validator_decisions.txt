@@ -43,7 +43,7 @@
 === shopify_temu_eu / uninstalls → OK ===
   - pagination: ok
   - row_count_uninstalls: ok
-      · Current uninstalls: 131 rows.
+      · Current uninstalls: 133 rows.
       · Previous uninstalls: 131 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shein_woocommerce / sellers → OK ===
