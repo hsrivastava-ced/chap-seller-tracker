@@ -21,7 +21,7 @@
       · Unexpected extras: 0
   - pagination: ok
   - row_count_sellers: ok
-      · Current sellers: 342 rows.
+      · Current sellers: 343 rows.
       · Previous sellers: 342 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shein / uninstalls → OK ===
@@ -44,7 +44,7 @@
   - pagination: ok
   - row_count_uninstalls: ok
       · Current uninstalls: 133 rows.
-      · Previous uninstalls: 131 rows. Drop: 0.0% (soft=20%, hard=50%).
+      · Previous uninstalls: 133 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shein_woocommerce / sellers → OK ===
   - customize_grid: ok
