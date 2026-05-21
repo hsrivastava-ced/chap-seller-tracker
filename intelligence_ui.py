@@ -1378,35 +1378,40 @@ def _render_delta_feed(*, app_key: str) -> None:
     their full profile. The Churned events here remember the orders /
     products / plan of sellers who've already vanished from cHAP.
     """
+    # Three potential delta sources; pick the one whose LATEST snapshot
+    # is newest. Previously we picked Supabase first and only fell back
+    # when it was empty — that meant a few stale Supabase rows (e.g.
+    # from before a CI env-var bug stopped writes) would mask the
+    # fresh git-committed scrapes. Verified 2026-05-21: SHEIN snapshots
+    # in Supabase ended Apr 24; git had May 21. The delta feed showed
+    # April's "new install" instead of May 20's belle@buyboxlogistics.
     sb = SupabaseClient()
-    prior_stamp, latest_stamp, prior_rows, latest_rows = (
-        seller_delta_source.from_supabase(sb, app_name=app_key)
-    )
+    sources = []
+    try:
+        sources.append(("supabase", seller_delta_source.from_supabase(sb, app_name=app_key)))
+    except Exception as err:
+        logging.debug(f"delta source supabase errored: {err}")
+    try:
+        sources.append(("git", seller_delta_source.from_git_history(ROOT, app_name=app_key)))
+    except Exception as err:
+        logging.debug(f"delta source git errored: {err}")
+    try:
+        sources.append(("local", seller_delta_source.from_local_history(HISTORY_DIR, app_name=app_key)))
+    except Exception as err:
+        logging.debug(f"delta source local errored: {err}")
 
-    # If Supabase has < 2 rows for this app, fall back to git history of
-    # results/latest/run.json. The scraper-bot commits one snapshot per
-    # successful run as `chore(data): scrape …`, so two consecutive
-    # commits give us a 100% reliable diff source — this works on
-    # Streamlit Cloud immediately without any external service.
-    if not prior_rows or not latest_rows:
-        p_stamp, l_stamp, p_rows, l_rows = (
-            seller_delta_source.from_git_history(ROOT, app_name=app_key)
-        )
-        if p_rows and l_rows:
-            prior_stamp, latest_stamp = p_stamp, l_stamp
-            prior_rows, latest_rows = p_rows, l_rows
-
-    # Final fallback: local results/history/<stamp>/run.json (only useful
-    # on dev machines where the scraper has been run locally).
-    if not prior_rows or not latest_rows:
-        p_stamp, l_stamp, p_rows, l_rows = (
-            seller_delta_source.from_local_history(
-                HISTORY_DIR, app_name=app_key
-            )
-        )
-        if p_rows and l_rows:
-            prior_stamp, latest_stamp = p_stamp, l_stamp
-            prior_rows, latest_rows = p_rows, l_rows
+    best = (None, None, [], [])  # (prior_stamp, latest_stamp, prior_rows, latest_rows)
+    best_latest_key = ""
+    for name, tup in sources:
+        p_stamp, l_stamp, p_rows, l_rows = tup
+        if not p_rows or not l_rows:
+            continue
+        # Run stamps sort lexicographically because they're YYYY-MM-DD_…
+        key = l_stamp or ""
+        if key > best_latest_key:
+            best_latest_key = key
+            best = (p_stamp, l_stamp, p_rows, l_rows)
+    prior_stamp, latest_stamp, prior_rows, latest_rows = best
 
     # Strip internal/test stores from BOTH snapshots before computing
     # any rail. Without this the `🌱 New install` and `🔄 Reinstall`
