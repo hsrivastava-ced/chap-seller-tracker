@@ -64,6 +64,18 @@ _URL_FIELDS = ("store_url",)
 # well-known cause of duplicate-seller false positives.
 _LOWERCASE_FIELDS = ("email",)
 
+# Integer fields. Supabase's `sellers` table types these as `integer`,
+# so we must coerce string sentinels ('N/A', '', '-', 'null') to None
+# before writes — observed on shein_woocommerce where the panel emits
+# 'N/A' for order_count/product_count when the WooCommerce REST hook
+# hasn't fired yet.
+_INT_FIELDS = (
+    "order_count", "failed_order_count", "product_count",
+)
+
+# Tokens that mean "no value" across panels. Lowercased for comparison.
+_NULL_TOKENS = frozenset({"", "n/a", "na", "-", "null", "none"})
+
 
 # ---------------------------------------------------------------------
 # Primitive normalisers
@@ -235,7 +247,36 @@ def normalize_seller_row(row: dict[str, Any]) -> dict[str, Any]:
             # preserves time resolution if present.
             prefer_date = (k == "installed_on")
             out[k] = normalize_date(out[k], prefer_iso_date=prefer_date)
+    for k in _INT_FIELDS:
+        if k in out:
+            out[k] = _coerce_int(out[k])
     return out
+
+
+def _coerce_int(value: Any) -> int | None:
+    """Best-effort string→int. 'N/A' / '' / '-' → None. Otherwise int(value).
+    Non-coercible values become None rather than raising — Supabase prefers
+    NULL over a write that aborts the whole row batch."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in _NULL_TOKENS:
+            return None
+        try:
+            return int(s)
+        except ValueError:
+            try:
+                return int(float(s))
+            except ValueError:
+                return None
+    return None
 
 
 def normalize_uninstall_row(row: dict[str, Any]) -> dict[str, Any]:

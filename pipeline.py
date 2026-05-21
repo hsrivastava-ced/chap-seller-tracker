@@ -272,7 +272,18 @@ def run_pipeline(
         logging.error("🚫 No data gathered — aborting pipeline.")
         return {"error": "no_data"}
 
-    # 2. Push current snapshots to Supabase (unless dry-run).
+    # 2. Normalise early — upstream of every Supabase write. Historically
+    # this happened AFTER the snapshot/sellers push, which sent raw rows
+    # (DD/MM/YYYY dates, 'N/A' int sentinels from shein_woocommerce) into
+    # the typed `sellers` table and silently dropped that app's rows. The
+    # comment on this block used to claim raw-faithful snapshots mattered,
+    # but `results/latest/run.json` is the authoritative raw archive — the
+    # Supabase row is a queryable projection, not a museum piece.
+    sellers_by_app, uninstalls_by_app = normalize_run_data(
+        sellers_by_app, uninstalls_by_app
+    )
+
+    # 3. Push current snapshots + relational sellers + identity layer.
     client = SupabaseClient()
     snapshot_writes: dict[str, int] = {}
     if not dry_run:
@@ -294,6 +305,24 @@ def run_pipeline(
                 f"📥 Wrote {total_written} snapshot row(s) across "
                 f"{len(snapshot_writes)} (app,kind) pairs."
             )
+        # 3b. Refresh the canonical identity layer (sellers_canonical /
+        # seller_shops / seller_identity_log + sellers.seller_key FK).
+        # Idempotent — hydrates from Supabase first, so re-runs reuse
+        # existing keys instead of duplicating. Failure here must NOT
+        # abort: identity is enhancement, not a hard dependency for the
+        # downstream analytics step.
+        try:
+            from backfill_seller_identity import apply_identity_layer
+            id_counters = apply_identity_layer(
+                client, sellers_by_app, run_stamp=current_stamp,
+            )
+            logging.info(
+                f"🧬 identity layer: +{id_counters['sellers_inserted']} sellers, "
+                f"+{id_counters['shops_inserted']} shops, "
+                f"{id_counters['sellers_link_updated']} FK rows linked."
+            )
+        except Exception as err:
+            logging.warning(f"apply_identity_layer failed: {err}")
 
     # 3. Pull previous snapshots for delta.
     prev_sellers: dict[str, list[dict]] = {}
@@ -322,15 +351,10 @@ def run_pipeline(
             ),
         )
 
-    # 4. Normalise + compute deltas + KPIs.
-    # Normalise BOTH current and previous so URL-casing / trailing-slash /
-    # date-format drift between runs doesn't show up as spurious churn or
-    # new_install. The scraper writes raw values to disk on purpose
-    # (we want the on-disk snapshot to be faithful to what the admin
-    # panel rendered), so normalisation is applied here in-memory.
-    sellers_by_app, uninstalls_by_app = normalize_run_data(
-        sellers_by_app, uninstalls_by_app
-    )
+    # 4. Compute deltas + KPIs. `sellers_by_app` / `uninstalls_by_app`
+    # were already normalised at step 2; we still need to normalise
+    # `prev_*` here because it comes from a previous snapshot (Supabase
+    # or disk) which may pre-date the current normalisation rules.
     prev_sellers, prev_unins = normalize_run_data(prev_sellers, prev_unins)
 
     report = analyse_run(
