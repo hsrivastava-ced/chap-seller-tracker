@@ -43,11 +43,13 @@ from analytics_advanced import (
     build_stakeholder_report,
     display_name,
     exclude_test_stores,
+    filter_active_as_of,
     filter_by_year,
     fmt_date_long,
     fmt_month_short,
     fmt_quarter_short,
     fmt_year,
+    period_end_for,
 )
 from normalize import normalize_run_data
 
@@ -478,6 +480,133 @@ def _load_run(stamp: str) -> dict[str, Any]:
     )
     with path.open("r", encoding="utf-8") as fh:
         return json.load(fh)
+
+
+# Cache the heavy stake_full computation by stamp. This is the ~800-row
+# Python iteration that used to fire on every Streamlit interaction —
+# moving it behind a cache key turns filter changes into instant reads.
+# TTL matches _load_run so we never serve a stake older than the run.
+@st.cache_data(show_spinner=False, ttl=120)
+def _prep_full(stamp: str) -> dict[str, Any]:
+    """Load + normalize + exclude_test_stores + build the FULL stake
+    report (no year filter). Returns the bundle the dashboard needs to
+    drive the sidebar (year list, period list) and the snapshot KPIs.
+
+    Cache key: `stamp` only. Year/Month/App filters don't invalidate
+    this — they slice or restyle, they don't change the underlying base.
+
+    Source priority: local `results/latest/run.json` (fast disk read,
+    primary). If the file is missing — fresh clone, cleared cache —
+    falls back to Supabase via `fetch_sellers_grouped_by_app`. The
+    DB path returns the same dict-of-rows shape so the analytics
+    pipeline doesn't care which source fed it.
+    """
+    run = _load_run(stamp)
+    sellers_by_app = run.get("data") or {}
+    unins_by_app = _uninstalls_from_run(run)
+    # Supabase fallback when the local file was empty (e.g. fresh deploy
+    # before the first scrape commit lands). Cheap to skip when run.json
+    # already returned a populated dict.
+    if not sellers_by_app:
+        try:
+            from supabase_client import SupabaseClient
+            client = SupabaseClient()
+            if not client._dry_run:
+                sellers_by_app = client.fetch_sellers_grouped_by_app()
+                logging.info(
+                    f"📡 Loaded sellers from Supabase fallback: "
+                    f"{sum(len(v) for v in sellers_by_app.values())} rows"
+                )
+        except Exception as err:
+            logging.warning(f"Supabase fallback failed: {err}")
+
+    sellers_by_app, unins_by_app = normalize_run_data(sellers_by_app, unins_by_app)
+    sellers_by_app = exclude_test_stores(sellers_by_app)
+    unins_by_app = exclude_test_stores(unins_by_app)
+
+    stake_full = build_stakeholder_report(
+        sellers_by_app=sellers_by_app,
+        uninstalls_by_app=unins_by_app,
+        run_stamp=stamp,
+        drop_test_stores=False,  # already stripped above
+    )
+    available_years = _collect_years(sellers_by_app, unins_by_app)
+    available_periods = stake_full["monthly"].get("periods", [])
+
+    return {
+        "run": run,
+        "sellers_by_app": sellers_by_app,
+        "unins_by_app": unins_by_app,
+        "stake_full": stake_full,
+        "available_years": available_years,
+        "available_periods": available_periods,
+        "discovered_apps": _discover_app_keys(sellers_by_app, unins_by_app),
+    }
+
+
+@st.cache_data(show_spinner=False, ttl=120)
+def _prep_asof(stamp: str, year: int | None, month_key: str | None) -> dict[str, Any]:
+    """Build the AS-OF-PERIOD snapshot bundle. The semantic shift from
+    `_prep_year`: instead of "sellers whose installed_on is in the
+    selected year" (a *cohort*), this returns "sellers who were
+    *currently active* at the end of the selected period" (a *snapshot*).
+
+    Used for the snapshot KPIs — Active Installs, Paid / Free / Not Paid,
+    Activity buckets, Source Country, Plan Breakdown — which all want to
+    say "at the end of this period, here's what the live base looked
+    like." When no period is set, returns the full unfiltered base.
+    """
+    base = _prep_full(stamp)
+    cutoff = period_end_for(year=year, month_key=month_key)
+    if cutoff is None:
+        return {
+            "sellers_asof": base["sellers_by_app"],
+            "stake_asof": base["stake_full"],
+            "period_end": None,
+        }
+    sellers_asof = filter_active_as_of(base["sellers_by_app"], period_end=cutoff)
+    stake_asof = build_stakeholder_report(
+        sellers_by_app=sellers_asof,
+        uninstalls_by_app=base["unins_by_app"],
+        run_stamp=stamp,
+        drop_test_stores=False,
+    )
+    return {
+        "sellers_asof": sellers_asof,
+        "stake_asof": stake_asof,
+        "period_end": cutoff,
+    }
+
+
+@st.cache_data(show_spinner=False, ttl=120)
+def _prep_year(stamp: str, year: int | None) -> dict[str, Any]:
+    """Build the year-filtered stake from the cached full prep. Pure
+    derivation — when (stamp, year) is unchanged, no work happens at
+    all. Year=None returns the full stake (no filtering)."""
+    base = _prep_full(stamp)
+    sellers_by_app = base["sellers_by_app"]
+    unins_by_app = base["unins_by_app"]
+
+    if year is None:
+        return {
+            "sellers_year": sellers_by_app,
+            "unins_year": unins_by_app,
+            "stake": base["stake_full"],
+        }
+
+    sellers_year = filter_by_year(sellers_by_app, date_field="installed_on", year=year)
+    unins_year = filter_by_year(unins_by_app, date_field="uninstalled_on", year=year)
+    stake = build_stakeholder_report(
+        sellers_by_app=sellers_year,
+        uninstalls_by_app=unins_year,
+        run_stamp=stamp,
+        drop_test_stores=False,
+    )
+    return {
+        "sellers_year": sellers_year,
+        "unins_year": unins_year,
+        "stake": stake,
+    }
 
 
 def _uninstalls_from_run(run: dict[str, Any]) -> dict[str, list[dict]]:
@@ -1114,21 +1243,31 @@ def _kpi_row(
     month_key: str | None,
     *,
     growth_source: dict | None = None,
+    snapshot_stake: dict | None = None,
+    period_end: Any = None,
 ) -> None:
-    """Top row — 8 KPI cards in two rows. Each card's value color is
+    """Top row — 9 KPI cards in two rows. Each card's value color is
     semantic: indigo = primary count, green = positive/paid, red =
     churn/uninstalls, amber = caution (not-paid, zero-order), violet
-    accent. A legend strip is rendered above the cards so stakeholders
-    can map color → meaning at a glance.
+    accent.
 
-    `growth_source` is an optional separate report (typically the full
-    unfiltered one) used solely for the MoM growth% card. This lets
-    Jan 2026 MoM reference Dec 2025 even when the year filter would
-    have hidden Dec 2025 from `stake`.
+    Two sources of truth feed this row:
+      - `snapshot_stake` (live or as-of-period) — drives the *stock*
+        KPIs: Active Installs, Paid, Free, Not Paid, Active(≥1 order),
+        Zero-order. These are subdivisions of the same denominator
+        ("sellers active right now / as of period_end"), so picking the
+        right base is the bug fix for the 2026-05-21 audit (where the
+        old `stake` was a year-cohort and the cards lied about
+        snapshot semantics).
+      - `stake` (period flow, year-narrowed) — drives the *flow* KPIs:
+        New Installs / Uninstalls for the selected month/year.
+      - `growth_source` (full unfiltered) — drives MoM Growth so
+        Jan 2026 can still compare to Dec 2025.
     """
-    paid = stake["paid"]
-    totals = paid["totals"]
-    active = totals.get(app_key, 0)
+    snap = snapshot_stake or stake  # back-compat for any caller missing the new kwarg
+    snap_paid = snap["paid"]
+    snap_totals = snap_paid["totals"]
+    active = snap_totals.get(app_key, 0)
 
     monthly = stake["monthly"]
     periods = monthly.get("periods", [])
@@ -1173,9 +1312,14 @@ def _kpi_row(
         mom_str = "—"
         mom_color = PALETTE["text_soft"]
 
-    paid_count = paid["by_app"].get(app_key, {}).get("Paid", 0)
-    free_count = paid["by_app"].get(app_key, {}).get("Free", 0)
-    notpaid_count = paid["by_app"].get(app_key, {}).get("Not Paid", 0)
+    # Composition KPIs (Paid / Free / Not Paid) are subdivisions of the
+    # snapshot base — read from `snap`, NOT `stake`. With Active=333 for
+    # SHEIN, "Paid Sellers = 8" now means "8 of the currently-active 333",
+    # which is the question the cards actually claim to answer.
+    snap_by_app = snap["paid"]["by_app"]
+    paid_count = snap_by_app.get(app_key, {}).get("Paid", 0)
+    free_count = snap_by_app.get(app_key, {}).get("Free", 0)
+    notpaid_count = snap_by_app.get(app_key, {}).get("Not Paid", 0)
 
     # Color-legend strip so every card's color is interpretable at a glance.
     swatch = lambda c, label: (
@@ -1197,19 +1341,37 @@ def _kpi_row(
 
     app_label = display_name(app_key)
 
+    # Sublabel + tooltip flex with whether a filter is set.
+    if period_end is not None:
+        try:
+            active_sublabel = f"As of {period_end.strftime('%b %d, %Y')} · {app_label}"
+        except Exception:
+            active_sublabel = f"Currently installed · {app_label}"
+        active_tooltip = (
+            f"{app_label} sellers who were active AS OF "
+            f"{period_end.strftime('%b %d, %Y')} — installed on or before "
+            "that date and not yet uninstalled. Approximation note: "
+            "sellers who installed before the cutoff but uninstalled "
+            "AFTER it are missed (the uninstall table doesn't carry "
+            "installed_on). Test stores excluded."
+        )
+    else:
+        active_sublabel = f"Currently installed · {app_label}"
+        active_tooltip = (
+            f"{app_label} sellers currently installed — one row per active "
+            "shop in the latest scrape, test stores excluded. This is a "
+            "live snapshot; it does NOT narrow with Year/Month filters. "
+            "Use New Installs / Uninstalls for per-period flow."
+        )
+
     row1 = st.columns(4)
     row1[0].markdown(
         _kpi_card(
             "👥 Active Installs",
             f"{active:,}",
-            sublabel=f"Across {app_label}",
+            sublabel=active_sublabel,
             value_color=PALETTE["primary"],
-            tooltip=(
-                f"Count of rows in the latest scrape for {app_label} where "
-                "the seller_id is non-empty and the row isn't a known test "
-                "store (demo/qa shops are filtered via exclude_test_stores). "
-                "Refreshes with every scrape run."
-            ),
+            tooltip=active_tooltip,
         ),
         unsafe_allow_html=True,
     )
@@ -1261,21 +1423,28 @@ def _kpi_row(
     )
 
     st.write("")  # small gap
-    # Five KPI cards: Paid / Free / Not Paid / Active / Zero-order.
-    # Free is split out from the binary Paid-vs-NotPaid because it
-    # represents tracked-but-not-revenue sellers and is the primary
-    # upsell pipeline (see Customer Intelligence → Upsell candidates).
+    # Composition row — five KPI cards subdividing the SAME snapshot base
+    # as Active Installs above (so Paid + Free + Not Paid sums to Active).
+    # Sublabels include the denominator inline ("8 of 333") so the reader
+    # never has to do the math.
+    base_phrase = (
+        f"of {active:,} active{' as of ' + period_end.strftime('%b %d, %Y') if period_end else ''}"
+        if active else "no active sellers"
+    )
+
     row2 = st.columns(5)
     row2[0].markdown(
         _kpi_card(
             "💳 Paid Sellers",
             f"{paid_count:,}",
-            sublabel="On a paid plan",
+            sublabel=base_phrase,
             value_color=PALETTE["success"],
             tooltip=(
-                f"Sellers whose plan field contains a named PAID subscription "
-                f"for {app_label}. Free / Trial / N/A are excluded — they "
-                f"have their own cards."
+                f"{app_label} sellers on a named PAID subscription. "
+                f"Subdivision of the {active:,} active sellers — Paid + "
+                "Free + Not Paid = Active. Plan field reflects the LATEST "
+                "scrape value even when an as-of-period filter is set "
+                "(we don't have historical plan state)."
             ),
         ),
         unsafe_allow_html=True,
@@ -1284,14 +1453,13 @@ def _kpi_row(
         _kpi_card(
             "🆓 Free Sellers",
             f"{free_count:,}",
-            sublabel="On Free / Trial — upsell pipeline",
+            sublabel=base_phrase,
             value_color=PALETTE["primary"],
             tooltip=(
-                f"Sellers explicitly on a Free or Trial tier for "
-                f"{app_label}. Tracked separately from Not Paid because "
-                f"they're in the funnel — Customer Intelligence ranks "
-                f"them by order_count + product_count to surface the "
-                f"best upsell candidates."
+                f"{app_label} sellers on a Free or Trial tier. Tracked "
+                "separately from Not Paid because they're in the funnel "
+                "— Customer Intelligence ranks them by order_count + "
+                "product_count to surface the best upsell candidates."
             ),
         ),
         unsafe_allow_html=True,
@@ -1300,28 +1468,35 @@ def _kpi_row(
         _kpi_card(
             "🕗 Not Paid",
             f"{notpaid_count:,}",
-            sublabel="No plan tracked",
+            sublabel=base_phrase,
             value_color=PALETTE["warning"],
             tooltip=(
-                f"Sellers whose plan field is empty or N/A for {app_label} "
-                f"— either the panel doesn't track plans for this app, or "
-                f"the seller hasn't been assigned one yet."
+                f"{app_label} sellers whose plan field is empty or N/A — "
+                "either the panel doesn't track plans for this app, or "
+                "the seller hasn't been assigned one yet."
             ),
         ),
         unsafe_allow_html=True,
     )
-    # Activity numbers
-    act = stake["activity"]["by_app"].get(app_key, {})
+    # Activity numbers — read from the SAME snapshot stake as Paid/Free
+    # so denominators match. Previously these used `stake.activity` which
+    # was the year-cohort and produced "4 of 14 sellers" instead of
+    # "X of 333 sellers" for SHEIN.
+    snap_act = snap["activity"]["by_app"].get(app_key, {})
+    snap_active_with_order = snap_act.get("active_sellers", 0)
+    snap_zero_order = snap_act.get("zero_order_sellers", 0)
+    snap_total = snap_act.get("total_sellers", 0)
     row2[3].markdown(
         _kpi_card(
             "📦 Active (≥1 order)",
-            f"{act.get('active_sellers', 0):,}",
-            sublabel=f"of {act.get('total_sellers', 0):,} sellers",
+            f"{snap_active_with_order:,}",
+            sublabel=f"of {snap_total:,} sellers",
             value_color=PALETTE["primary"],
             tooltip=(
-                f"Sellers with order_count ≥ 1 at the time of the latest "
-                f"scrape. Denominator is every seller currently installed "
-                f"on {app_label}."
+                f"{app_label} sellers with order_count ≥ 1 in the latest "
+                "scrape. Denominator is the snapshot base above (every "
+                "currently-active seller, or every seller active as of "
+                "the selected period_end)."
             ),
         ),
         unsafe_allow_html=True,
@@ -1329,14 +1504,13 @@ def _kpi_row(
     row2[4].markdown(
         _kpi_card(
             "⚠️ Zero-order",
-            f"{act.get('zero_order_sellers', 0):,}",
-            sublabel="Installed but never transacted",
+            f"{snap_zero_order:,}",
+            sublabel=f"of {snap_total:,} sellers",
             value_color=PALETTE["accent"],
             tooltip=(
-                f"Sellers who have installed {app_label} but have "
-                f"order_count = 0 at latest scrape — install happened but "
-                f"no order has flowed yet. Candidates for onboarding "
-                f"outreach."
+                f"{app_label} sellers with order_count = 0 — installed "
+                "but no order has flowed. Candidates for onboarding "
+                "outreach. Same base as Active(≥1 order)."
             ),
         ),
         unsafe_allow_html=True,
@@ -2006,38 +2180,23 @@ def main() -> None:
         return
 
     # Latest run — stakeholders want the newest snapshot.
-    latest_stamp = stamps[0]
-    run = _load_run(latest_stamp)
-    sellers_by_app = run.get("data") or {}
-    unins_by_app = _uninstalls_from_run(run)
-
-    # Normalise before anything else, then strip test stores.
-    sellers_by_app, unins_by_app = normalize_run_data(sellers_by_app, unins_by_app)
-    sellers_by_app = exclude_test_stores(sellers_by_app)
-    unins_by_app = exclude_test_stores(unins_by_app)
-
-    # Year choices derive from the data we have.
-    available_years = _collect_years(sellers_by_app, unins_by_app)
-
-    # Build a FULL report first so we know what month periods exist —
-    # the sidebar Month picker is driven from this and the Growth tables
-    # compute deltas over the full series (so Q1/26 can reference Q4/25
-    # and 2026 can reference 2025 even when the year filter is active).
     stamp = stamps[0]
-    stake_full = build_stakeholder_report(
-        sellers_by_app=sellers_by_app,
-        uninstalls_by_app=unins_by_app,
-        run_stamp=stamp,
-        drop_test_stores=False,  # already stripped above
-    )
-    available_periods = stake_full["monthly"].get("periods", [])
+    # _prep_full is @st.cache_data — load + normalize + exclude_test_stores
+    # + build stake_full happens ONCE per stamp, not on every Streamlit
+    # rerun. Filter changes below reuse this cached bundle.
+    base = _prep_full(stamp)
+    run = base["run"]
+    sellers_by_app = base["sellers_by_app"]
+    unins_by_app = base["unins_by_app"]
+    stake_full = base["stake_full"]
+    available_years = base["available_years"]
+    available_periods = base["available_periods"]
 
     # Rebind APP_KEYS to whatever the registry + data actually has.
     # Picks up newly onboarded apps (shein_woocommerce,
     # shopify_gearexchange, …) without editing the hardcoded list above.
-    discovered = _discover_app_keys(sellers_by_app, unins_by_app)
     APP_KEYS.clear()
-    APP_KEYS.extend(discovered)
+    APP_KEYS.extend(base["discovered_apps"])
 
     # Sidebar multiselect offers every REGISTERED app, even ones that
     # haven't been scraped into results/latest yet. Otherwise a newly
@@ -2072,19 +2231,20 @@ def main() -> None:
             f"aggregates are coming in a follow-up."
         )
 
-    # Apply year filter — installs by installed_on, uninstalls by
-    # uninstalled_on — for the "demographic" report. Growth tables and
-    # the KPI MoM card keep using stake_full so cross-year comparisons
-    # remain visible.
-    sellers_year = filter_by_year(sellers_by_app, date_field="installed_on", year=year)
-    unins_year = filter_by_year(unins_by_app, date_field="uninstalled_on", year=year)
+    # Apply year filter — handled by _prep_year which is also cached.
+    # When `year` is unchanged across reruns this is a no-op lookup.
+    year_bundle = _prep_year(stamp, year)
+    sellers_year = year_bundle["sellers_year"]
+    unins_year = year_bundle["unins_year"]
+    stake = year_bundle["stake"]
 
-    stake = build_stakeholder_report(
-        sellers_by_app=sellers_year,
-        uninstalls_by_app=unins_year,
-        run_stamp=stamp,
-        drop_test_stores=False,  # already stripped above
-    )
+    # As-of-period snapshot bundle — drives the *stock* KPIs (Active
+    # Installs, Paid/Free/Not Paid, Activity buckets) and composition
+    # panels (Plan Breakdown, Source Country). Equals stake_full when
+    # no period filter is set.
+    asof_bundle = _prep_asof(stamp, year, month_key)
+    stake_asof = asof_bundle["stake_asof"]
+    period_end = asof_bundle["period_end"]
 
     # ------------ Header + KPI row ------------
     # `stamp` may be the synthetic "__latest__" placeholder when
@@ -2101,10 +2261,17 @@ def main() -> None:
     _render_header(app_key, year, run_dt)
     st.write("")  # small breathing room between header and KPIs
 
-    # KPI row uses stake_full's growth series so the MoM card can
-    # reference a prior month even if the year filter would have hidden
-    # it (e.g. Jan 2026 MoM comparing to Dec 2025).
-    _kpi_row(stake, app_key, year, month_key, growth_source=stake_full)
+    # KPI row:
+    #   - flow KPIs (New Installs/Uninstalls) read from `stake` (year-narrowed monthly).
+    #   - snapshot KPIs (Active Installs, Paid/Free/etc) read from `stake_asof`.
+    #   - MoM growth reads from `stake_full` so Jan 2026 can compare to Dec 2025
+    #     even when the year filter hides 2025.
+    _kpi_row(
+        stake, app_key, year, month_key,
+        growth_source=stake_full,
+        snapshot_stake=stake_asof,
+        period_end=period_end,
+    )
     st.write("")
 
     # ------------ Trend duo ------------
@@ -2114,32 +2281,40 @@ def main() -> None:
     _trend_panels(stake, app_key, month_key=month_key, selected_apps=selected_apps)
 
     # ------------ Paid vs Not Paid ------------
-    _paid_panel(stake, app_key)
+    # Composition panels read from `stake_asof` (snapshot base) — same
+    # denominator as the row-2 KPI cards above, so the chart numbers
+    # match the cards.
+    _paid_panel(stake_asof, app_key)
 
     # ------------ Plan Breakdown (new 2026-04-19) ------------
-    # Sits right after Paid vs Not Paid because it drills into the Paid
-    # slice by exact plan name. Only meaningful now that the Customize
-    # Grid fix lands full plan data across all apps.
-    _plan_breakdown_panel(stake, app_key)
+    _plan_breakdown_panel(stake_asof, app_key)
 
     # ------------ Activity panels ------------
-    _order_activity_panel(stake, app_key)
-    _product_activity_panel(stake, app_key)
+    _order_activity_panel(stake_asof, app_key)
+    _product_activity_panel(stake_asof, app_key)
 
     # ------------ Country distribution ------------
-    _source_country_panel(stake, app_key)
+    # Country + framework are composition panels — driven by snapshot base.
+    _source_country_panel(stake_asof, app_key)
 
     # ------------ Framework (TEMU EU only) ------------
-    _framework_panel(stake, app_key)
+    _framework_panel(stake_asof, app_key)
 
     # ------------ Install Velocity ------------
-    _velocity_panel(stake, app_key, year)
+    # Velocity is a TIME SERIES — always uses full history. Year filter
+    # narrows the display window only (handled inside the panel by the
+    # subtitle text), not the input data.
+    _velocity_panel(stake_full, app_key, year)
 
     # ------------ Uninstall Platform (TEMU EU only) ------------
     _uninstall_platform_panel(stake, app_key)
 
     # ------------ Cumulative curve ------------
-    _cumulative_panel(stake, app_key)
+    # Cumulative Active Sellers must run over the FULL history so the
+    # line starts at the pre-period baseline (e.g. ~319 active before
+    # Jan 2026) instead of 0. Year filter currently doesn't affect this
+    # — the chart shows the running total of the live base over all time.
+    _cumulative_panel(stake_full, app_key)
 
     # ------------ Growth tables ------------
     # Always driven from stake_full so deltas cross year boundaries.

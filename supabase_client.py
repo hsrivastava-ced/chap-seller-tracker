@@ -290,6 +290,46 @@ class SupabaseClient:
             canonical["extra_fields"] = extra
         return canonical
 
+    def fetch_sellers_grouped_by_app(self) -> dict[str, list[dict]]:
+        """Fetch every active seller row, grouped {app_name: [rows]}.
+
+        Shape matches what `dashboard.py` expects from the local
+        `run.json["data"]` payload — same field names, same row shape —
+        so the dashboard can swap the source without restructuring its
+        downstream analytics pipeline.
+
+        Used as a fallback when `results/latest/run.json` is missing
+        (fresh clone, cleared cache, etc.) and as the primary source
+        once the dashboard moves fully off file reads.
+
+        Paginates via PostgREST `range` so we don't hit the implicit
+        1000-row cap. Returns {} in dry-run mode."""
+        out: dict[str, list[dict]] = {}
+        if self._dry_run or self._client is None:
+            logging.info("🧪 [dry-run] would fetch sellers grouped by app")
+            return out
+        try:
+            page_size = 1000
+            offset = 0
+            while True:
+                resp = (
+                    self._client.table("sellers")
+                    .select("*")
+                    .range(offset, offset + page_size - 1)
+                    .execute()
+                )
+                rows = list(getattr(resp, "data", None) or [])
+                if not rows:
+                    break
+                for r in rows:
+                    out.setdefault(r["app_name"], []).append(r)
+                if len(rows) < page_size:
+                    break
+                offset += page_size
+        except Exception as err:
+            logging.error(f"fetch_sellers_grouped_by_app failed: {err}")
+        return out
+
     def fetch_sellers(
         self,
         *,

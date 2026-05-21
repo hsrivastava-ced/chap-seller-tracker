@@ -1184,6 +1184,71 @@ def filter_by_year(
     return out
 
 
+def filter_active_as_of(
+    sellers_by_app: dict[str, list[dict]] | None,
+    *,
+    period_end: date | None,
+) -> dict[str, list[dict]]:
+    """Return sellers who were *active* as of `period_end`.
+
+    "Active" here means: `installed_on <= period_end` AND the seller is
+    currently in the latest scrape (i.e. not uninstalled). This is the
+    point-in-time-snapshot semantic stakeholders expect from year/month
+    filters — answers "who was using SHEIN at the end of Apr 2026?".
+
+    Limitation: we approximate. Sellers who installed before period_end
+    but uninstalled AFTER period_end (so they WERE active during the
+    period) are missing from `sellers_by_app` and the cHAP uninstall
+    table doesn't carry their `installed_on`. Result: a slight under-
+    count proportional to churn between period_end and today. Document
+    this in tooltips, don't bury it.
+
+    `period_end` is the LAST day of the selected period (e.g. for
+    "Apr 2026" pass date(2026, 4, 30)). `period_end=None` returns the
+    input unchanged (live snapshot, no time filter)."""
+    if period_end is None or not sellers_by_app:
+        return sellers_by_app or {}
+    out: dict[str, list[dict]] = {}
+    for app, rows in sellers_by_app.items():
+        kept: list[dict] = []
+        for r in rows or []:
+            d = _parse_iso_date(r.get("installed_on"))
+            if d is None:
+                # Unparseable installed_on → keep, so we don't silently
+                # under-count. Same defensive choice as filter_by_year
+                # makes the OPPOSITE call (drops on unparseable), so we
+                # log the divergence in case it matters later.
+                kept.append(r)
+                continue
+            if d <= period_end:
+                kept.append(r)
+        out[app] = kept
+    return out
+
+
+def period_end_for(*, year: int | None, month_key: str | None) -> date | None:
+    """Resolve the (year, month_key) sidebar selection to a point-in-time
+    cutoff. Year+Month → last day of that month. Year only → Dec 31 of
+    that year (clamped to today if the year is the current one and we're
+    mid-year). Neither → None (live snapshot)."""
+    today = date.today()
+    if month_key:
+        try:
+            y, m = month_key.split("-")
+            y_i, m_i = int(y), int(m)
+        except (ValueError, IndexError):
+            return None
+        if m_i == 12:
+            return date(y_i, 12, 31)
+        # Last day of month = (next month, day 1) - 1 day
+        from datetime import timedelta
+        return date(y_i, m_i + 1, 1) - timedelta(days=1)
+    if year is not None:
+        eoy = date(year, 12, 31)
+        return min(eoy, today) if year == today.year else eoy
+    return None
+
+
 # ---------------------------------------------------------------------
 # Headline stakeholder report — one-stop assembly
 # ---------------------------------------------------------------------
