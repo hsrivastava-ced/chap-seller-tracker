@@ -1,13 +1,13 @@
 app: shopify_temu_eu
-row_count: 70
+row_count: 71
 
 populated counts (non-empty):
-  plan: 70/70
-  order_count: 70/70
-  product_count: 70/70
-  failed_order_count: 70/70
-  steps_completed: 70/70
-  last_sync: 0/70
+  plan: 71/71
+  order_count: 71/71
+  product_count: 71/71
+  failed_order_count: 71/71
+  steps_completed: 0/71
+  last_sync: 0/71
 
 plan distribution (top 20):
   'N/A'                          40
@@ -15,10 +15,10 @@ plan distribution (top 20):
   'Regular'                      4
   'Premium'                      4
   'Standard'                     3
+  'Trial'                        2
   'Elite'                        2
   'Elite Yearly'                 1
   'Custom Yearly'                1
-  'Trial'                        1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '698326738af344e6960a9302', 'store_url': 'testshop-beans.myshopify.com', 'username': 'avishwakrma@threecolts.com', 'email': 'avishwakrma@threecolts.com', 'platforms': 'Shopify Temu', 'installed_on': '04/02/2026', 'app_type': '', 'source_country': 'United Kingdom', 'order_count': '11', 'product_count': '10', 'failed_order_count': '11', 'steps_completed': '0', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a101d0f765d4288210e32f2', 'store_url': 'plus-one-supplements.myshopify.com', 'username': 'giulio.ramazio@gmail.com', 'email': 'giulio.ramazio@gmail.com', 'platforms': 'Shopify Temu', 'installed_on': '22/05/2026', 'app_type': '', 'source_country': 'Italy', 'order_count': '0', 'product_count': '27', 'failed_order_count': '0', 'steps_completed': '', 'plan': 'Trial', 'last_sync': '', 'webhooks': 'View', 'action': ''}
