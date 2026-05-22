@@ -38,7 +38,7 @@
   - pagination: ok
   - row_count_sellers: ok
       · Current sellers: 71 rows.
-      · Previous sellers: 70 rows. Drop: 0.0% (soft=20%, hard=50%).
+      · Previous sellers: 71 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shopify_temu_eu / uninstalls → OK ===
   - pagination: ok
