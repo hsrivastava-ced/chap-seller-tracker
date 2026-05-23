@@ -12,7 +12,7 @@ apps:
   notes: ''
   shared_schedule: true
   frameworks:
-  - auto
+  - shopify
 - id: shein
   label: SHEIN
   dropdown_value: shein
