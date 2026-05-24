@@ -30,16 +30,15 @@
       · Current uninstalls: 337 rows.
       · Previous uninstalls: 337 rows. Drop: 0.0% (soft=20%, hard=50%).
 
-=== shopify_temu_eu / sellers → PENDING_REVIEW ===
+=== shopify_temu_eu / sellers → OK ===
   - customize_grid: ok
       · Observed 11 column options in Customize Grid.
       · Required: 4 (missing: 0)
       · Unexpected extras: 0
   - pagination: ok
-  - row_count_sellers: pending_review
+  - row_count_sellers: ok
       · Current sellers: 41 rows.
-      · Previous sellers: 71 rows. Drop: 42.3% (soft=20%, hard=50%).
-      → Row count dropped 42.3% vs previous run. Promoted but flagged for operator review.
+      · Previous sellers: 41 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shopify_temu_eu / uninstalls → OK ===
   - pagination: ok
