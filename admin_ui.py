@@ -44,7 +44,14 @@ import app_registry
 import auth
 import github_secret_updater as gh
 import roles
+import run_diagnostics
 from app_registry import AppEntry
+from gh_log_fetcher import (
+    LogUnavailable,
+    download_run_logs,
+    pick_scrape_step,
+    tail as log_tail,
+)
 from ui_errors import show_error, show_warning, show_info, wrap_page
 from ui_theme import apply_shared_theme, render_theme_picker
 
@@ -999,14 +1006,33 @@ jobs:
         run: |
           git config user.name "chap-scraper-bot"
           git config user.email "chap-scraper-bot@users.noreply.github.com"
-          git add results/
+          # Stage apps.yaml too: the scraper writes back here for
+          #   (a) framework discovery (auto → real list)
+          #   (b) schema_status auto-promote (pending_review → canonical)
+          # Without this, those mutations land on the runner and are
+          # silently discarded when the next runner checks out a fresh
+          # tree — Michael + GearExchange were stuck pending_review for
+          # exactly this reason until 2026-05-25.
+          git add results/ apps.yaml
           if git diff --cached --quiet; then
-            echo "No changes in results/ — skipping commit."
+            echo "No changes in results/ or apps.yaml — skipping commit."
             exit 0
           fi
+          # Pull-rebase before push — the shared scrape.yml and any other
+          # per-app workflows can land commits between our checkout and
+          # our push. Without the retry loop the run dies with
+          # "[rejected] (fetch first)" and the freshly scraped data
+          # never reaches main. Bounded to 3 attempts so a genuinely
+          # broken state still fails loudly.
           STAMP=$(date -u +"%Y-%m-%d_%H-%M-%SZ")
           git commit -m "chore(data): scrape {app_id} ${{STAMP}}"
-          git push origin HEAD:main
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              break
+            fi
+            echo "push attempt $attempt rejected — rebasing on origin/main"
+            git pull --rebase --autostash origin main || true
+          done
 
       - name: Upload debug artifacts on failure
         if: failure()
@@ -1460,6 +1486,69 @@ def _render_settings_tab(principal: roles.UserPrincipal) -> None:
     _render_frameworks_section(principal)
 
 
+def _format_relative_time(iso_ts: str) -> str:
+    """Render a UTC ISO timestamp as a relative phrase like '2 h ago'.
+
+    Returns '' on parse failure so callers can fall through gracefully —
+    we'd rather hide the caption than show 'Last discovered ???'.
+    """
+    if not iso_ts:
+        return ""
+    try:
+        ts = datetime.fromisoformat(iso_ts.replace("Z", "+00:00"))
+    except Exception:
+        return ""
+    now = datetime.now(timezone.utc)
+    delta = now - ts
+    secs = int(delta.total_seconds())
+    if secs < 60:
+        return "just now"
+    if secs < 3600:
+        return f"{secs // 60} min ago"
+    if secs < 86400:
+        return f"{secs // 3600} h ago"
+    days = secs // 86400
+    if days < 30:
+        return f"{days} d ago"
+    return ts.strftime("%Y-%m-%d")
+
+
+def _render_discovery_caption(app: AppEntry) -> None:
+    """Show the last discovery result inline, e.g.
+
+        🧭 Last discovered 2 h ago: found shopify, woocommerce (was: shopify)
+
+    Hidden entirely when the app has never been through a discovery
+    pass (frameworks_last_discovered_at empty).
+    """
+    last_at = getattr(app, "frameworks_last_discovered_at", "") or ""
+    if not last_at:
+        return
+    when = _format_relative_time(last_at)
+    current = list(getattr(app, "frameworks", None) or [])
+    previous = list(getattr(app, "frameworks_previous", None) or [])
+    current_str = ", ".join(current) or "auto"
+    if previous and previous != current:
+        prev_str = ", ".join(previous)
+        st.caption(
+            f"🧭 Last discovered {when}: found **{current_str}** "
+            f"(was: {prev_str})"
+        )
+    elif previous and previous == current:
+        # Discovery re-ran and confirmed no change. Useful info — tells
+        # the admin the Re-discover did fire and cHAP still returns the
+        # same set, not that nothing happened.
+        st.caption(
+            f"🧭 Last discovered {when}: no change — cHAP still returns "
+            f"**{current_str}**."
+        )
+    else:
+        # First-ever discovery (no prior value to compare against).
+        st.caption(
+            f"🧭 Last discovered {when}: found **{current_str}** (first run)."
+        )
+
+
 def _render_frameworks_section(principal: roles.UserPrincipal) -> None:
     """Edit the per-app `frameworks` list in apps.yaml.
 
@@ -1575,6 +1664,13 @@ def _render_frameworks_section(principal: roles.UserPrincipal) -> None:
                     )
                     st.rerun()
 
+            # Discovery audit caption — shown when the scraper has run
+            # `discover_frameworks()` for this app at least once. Closes
+            # the loop on Re-discover: without this, clicking the button
+            # silently mutates the textbox after the next scrape and
+            # the admin can't tell what cHAP returned.
+            _render_discovery_caption(a)
+
 
 # =================================================================
 # Runs tab — live GitHub Actions history
@@ -1628,7 +1724,6 @@ def _render_runs_tab(principal: roles.UserPrincipal) -> None:
         st.info("No workflow runs yet. Dispatch one from **Overview → Run scrape now**.")
         return
 
-    # --- build the display table ---------------------------------------
     status_emoji = {
         "success":   "✅ success",
         "failure":   "❌ failure",
@@ -1642,52 +1737,7 @@ def _render_runs_tab(principal: roles.UserPrincipal) -> None:
         "push":              "📤 push",
     }
 
-    rows = []
-    for r in runs:
-        conclusion = r.get("conclusion")
-        if conclusion is None and r.get("status") in ("in_progress", "queued"):
-            status = f"⏳ {r.get('status', 'running')}"
-        else:
-            status = status_emoji.get(conclusion, f"❓ {conclusion or '?'}")
-
-        start = r.get("run_started_at") or r.get("created_at")
-        end = r.get("updated_at")
-        dur = "—"
-        if start and end:
-            try:
-                s = datetime.fromisoformat(start.replace("Z", "+00:00"))
-                e = datetime.fromisoformat(end.replace("Z", "+00:00"))
-                total = int((e - s).total_seconds())
-                if total >= 60:
-                    dur = f"{total // 60}m {total % 60}s"
-                else:
-                    dur = f"{total}s"
-            except Exception:
-                pass
-
-        when = (start or "")[:16].replace("T", " ") if start else "—"
-
-        rows.append({
-            "When (UTC)": when,
-            "Workflow": r.get("name") or "—",
-            "Status": status,
-            "Duration": dur,
-            "Trigger": event_label.get(r.get("event"), r.get("event") or "?"),
-            "View": r.get("html_url") or "",
-        })
-
-    st.dataframe(
-        rows,
-        hide_index=True,
-        use_container_width=True,
-        column_config={
-            "View": st.column_config.LinkColumn(
-                "View", display_text="open →"
-            ),
-        },
-    )
-
-    # Quick summary band below the table.
+    # Headline counts above the per-run list.
     successes = sum(1 for r in runs if r.get("conclusion") == "success")
     failures = sum(1 for r in runs if r.get("conclusion") == "failure")
     running = sum(
@@ -1697,6 +1747,251 @@ def _render_runs_tab(principal: roles.UserPrincipal) -> None:
         f"Showing last {len(runs)}: ✅ {successes} success · "
         f"❌ {failures} fail · ⏳ {running} running."
     )
+
+    # Per-row rendering — each run gets a one-line summary + an expander
+    # with three tabs (Summary / What changed / Log tail).
+    for r in runs:
+        _render_one_run_row(r, ctx, status_emoji, event_label)
+
+
+def _render_one_run_row(
+    run: dict,
+    ctx,
+    status_emoji: dict,
+    event_label: dict,
+) -> None:
+    """Render one workflow run as a row + collapsible details expander.
+
+    Heavy I/O (log download, history JSON read) happens lazily inside the
+    expander body, so closing the expander keeps the page snappy and we
+    only spend a GitHub API call when a super admin actually drills in.
+    """
+    conclusion = run.get("conclusion")
+    status_text = (
+        f"⏳ {run.get('status', 'running')}"
+        if conclusion is None and run.get("status") in ("in_progress", "queued")
+        else status_emoji.get(conclusion, f"❓ {conclusion or '?'}")
+    )
+
+    start = run.get("run_started_at") or run.get("created_at")
+    end = run.get("updated_at")
+    when = (start or "")[:16].replace("T", " ") if start else "—"
+    dur = "—"
+    if start and end:
+        try:
+            s = datetime.fromisoformat(start.replace("Z", "+00:00"))
+            e = datetime.fromisoformat(end.replace("Z", "+00:00"))
+            total = int((e - s).total_seconds())
+            dur = f"{total // 60}m {total % 60}s" if total >= 60 else f"{total}s"
+        except Exception:
+            pass
+
+    workflow_name = run.get("name") or "—"
+    trigger = event_label.get(run.get("event"), run.get("event") or "?")
+    run_id = run.get("id")
+    html_url = run.get("html_url") or ""
+
+    # One-line summary header for the expander.
+    header = (
+        f"{status_text} · {workflow_name} · {when} UTC · {dur} · {trigger}"
+    )
+
+    with st.expander(header, expanded=False):
+        # "Open on GitHub" deep-link is always present — even if our
+        # diagnostics fail, the admin still has the raw log a click away.
+        st.markdown(
+            f"[Open this run on GitHub →]({html_url})"
+            if html_url else "_No GitHub URL available._"
+        )
+
+        # Fetch the log once per session per run_id. Streamlit re-runs
+        # the page on every interaction, so we cache via session_state.
+        log_text = ""
+        log_step_name = ""
+        log_error: Optional[str] = None
+        if run_id:
+            cache_key = f"_runlog_{run_id}"
+            cached = st.session_state.get(cache_key)
+            if cached is None:
+                try:
+                    with st.spinner("Loading log…"):
+                        logs = download_run_logs(ctx, run_id)
+                    log_step_name, log_text = pick_scrape_step(logs)
+                    st.session_state[cache_key] = {
+                        "step": log_step_name, "text": log_text,
+                    }
+                except LogUnavailable as e:
+                    log_error = str(e)
+                    st.session_state[cache_key] = {
+                        "step": "", "text": "", "error": str(e),
+                    }
+                except Exception as e:
+                    log_error = f"Couldn't fetch log: {e}"
+                    st.session_state[cache_key] = {
+                        "step": "", "text": "", "error": log_error,
+                    }
+            else:
+                log_step_name = cached.get("step", "")
+                log_text = cached.get("text", "")
+                log_error = cached.get("error")
+
+        tab_summary, tab_changed, tab_log = st.tabs(
+            ["Summary", "What changed", "Log tail"]
+        )
+
+        with tab_summary:
+            _render_run_summary(run, log_text, log_error)
+        with tab_changed:
+            _render_run_changed(log_text)
+        with tab_log:
+            _render_run_log_tail(log_text, log_step_name, log_error)
+
+
+def _render_run_summary(
+    run: dict, log_text: str, log_error: Optional[str]
+) -> None:
+    """Verdict line + per-app status table."""
+    conclusion = run.get("conclusion")
+
+    if conclusion == "success" and not log_error:
+        code, msg, action = "success", "Run completed without recognized errors.", ""
+    else:
+        code, msg, action = run_diagnostics.classify_failure(log_text)
+
+    # Color the verdict by code class.
+    if code == "success":
+        st.success(f"**{msg}**")
+    elif code in ("push_rejected", "customize_grid_partial", "playwright_timeout"):
+        # Recoverable / retryable.
+        st.warning(f"**{msg}**")
+        if action:
+            st.caption(f"💡 {action}")
+    elif code == "log_unavailable":
+        st.info(f"**{msg}**")
+        if action:
+            st.caption(action)
+    else:
+        st.error(f"**{msg}**")
+        if action:
+            st.caption(f"💡 {action}")
+
+    # --- per-app status table ---
+    run_stamp = run_diagnostics.find_run_stamp_in_log(log_text) or ""
+    try:
+        registry = app_registry.all_apps()
+    except Exception:
+        registry = []
+
+    per_app = run_diagnostics.per_app_status(
+        run_stamp=run_stamp,
+        registry=registry,
+        log_text=log_text,
+    )
+
+    if not per_app:
+        st.caption(
+            "No per-app data available for this run "
+            "(history snapshot missing and log didn't contain app markers)."
+        )
+        return
+
+    status_pill = {
+        "scraped":           "✅ scraped",
+        "preserved":         "🔁 preserved from last run",
+        "missed":            "➖ not in this run",
+        "attempted_failed":  "❌ attempted, no data",
+    }
+
+    rows_for_table = []
+    for r in per_app:
+        rows_for_table.append({
+            "App": r["label"],
+            "Status": status_pill.get(r["status"], r["status"]),
+            "Sellers": r["rows"] if r["rows"] is not None else "—",
+            "Plan filled": r["plan_populated"] or "—",
+            "Uninstalls": r["uninstalls"] if r["uninstalls"] is not None else "—",
+            "Error": (r["error"][:120] + "…") if len(r["error"]) > 120 else r["error"],
+        })
+
+    st.dataframe(rows_for_table, hide_index=True, use_container_width=True)
+    src_summary = ", ".join(sorted({r["source"] for r in per_app}))
+    st.caption(f"Data source(s): {src_summary}")
+
+
+def _render_run_changed(log_text: str) -> None:
+    """Row-level delta vs prior history snapshot."""
+    run_stamp = run_diagnostics.find_run_stamp_in_log(log_text)
+    if not run_stamp:
+        st.info(
+            "No history snapshot was identified for this run — most likely "
+            "the scrape didn't reach the persist step. Nothing to diff."
+        )
+        return
+
+    delta = run_diagnostics.row_delta(run_stamp)
+    if not delta:
+        st.info(
+            "History snapshot exists but contained no seller data to diff."
+        )
+        return
+
+    rows_for_table = []
+    total_added = total_removed = 0
+    for app_id, d in delta.items():
+        rows_for_table.append({
+            "App": app_id,
+            "Now": d["current"],
+            "Prev": d["previous"],
+            "+ Added": d["added"],
+            "− Removed": d["removed"],
+            "Net": d["current"] - d["previous"],
+        })
+        total_added += d["added"]
+        total_removed += d["removed"]
+
+    st.dataframe(rows_for_table, hide_index=True, use_container_width=True)
+    st.caption(
+        f"Compared against the immediately-prior history snapshot. "
+        f"Total: +{total_added} added · −{total_removed} removed."
+    )
+
+    # Per-app expanders for sample seller rows. Short enough to render
+    # inline; long enough that surfacing every seller_id would clutter
+    # the page.
+    for app_id, d in delta.items():
+        if not d["sample_added"] and not d["sample_removed"]:
+            continue
+        with st.expander(
+            f"{app_id} — sample of changes "
+            f"(+{d['added']} added, −{d['removed']} removed)",
+            expanded=False,
+        ):
+            if d["sample_added"]:
+                st.markdown(f"**New sellers (showing up to {len(d['sample_added'])})**")
+                st.dataframe(
+                    d["sample_added"], hide_index=True, use_container_width=True,
+                )
+            if d["sample_removed"]:
+                st.markdown(f"**Dropped sellers (showing up to {len(d['sample_removed'])})**")
+                st.dataframe(
+                    d["sample_removed"], hide_index=True, use_container_width=True,
+                )
+
+
+def _render_run_log_tail(
+    log_text: str, step_name: str, log_error: Optional[str]
+) -> None:
+    """Last ~150 lines of the runner log for the scrape step."""
+    if log_error:
+        st.warning(log_error)
+        return
+    if not log_text:
+        st.info("No log text available.")
+        return
+
+    if step_name:
+        st.caption(f"Step: `{step_name}` · showing the last 150 lines.")
+    st.code(log_tail(log_text, n_lines=150), language="log")
 
 
 # =================================================================

@@ -102,6 +102,19 @@ class AppEntry:
     # YAML edits — the discovery pass writes the real list back.
     frameworks: list[str] = field(default_factory=lambda: ["auto"])
 
+    # ---- discovery audit trail ----
+    # Populated by the scraper every time it runs `discover_frameworks()`
+    # for this app. Lets the admin UI show "Last discovered 2 h ago:
+    # found shopify, woocommerce (was: shopify)" inline next to the
+    # Re-discover button — otherwise clicking Re-discover is a black box
+    # (textbox value changes but the admin can't tell WHAT changed
+    # without diffing YAML manually).
+    #
+    # Both default to empty so old YAML loads cleanly; the UI hides
+    # the caption when these aren't set.
+    frameworks_last_discovered_at: str = ""
+    frameworks_previous: list[str] = field(default_factory=list)
+
     # ---- derived ----
     @property
     def user_env_key(self) -> str:
@@ -249,12 +262,20 @@ def update_frameworks(
     frameworks: list[str],
     *,
     path: Optional[Path] = None,
+    from_discovery: bool = False,
 ) -> bool:
     """Persist a discovered/edited frameworks list back to apps.yaml.
 
     Used by:
       - scraper.py after auto-discovery (`frameworks: [auto]` → real list)
-      - admin_ui.py when super-admin edits the per-app framework list
+        — pass `from_discovery=True` so the admin UI can show what changed.
+      - admin_ui.py when super-admin types or resets the framework list
+        — leave `from_discovery=False`; the audit trail records what
+        the SCRAPER discovered, not what the admin typed.
+
+    When `from_discovery=True` we also stamp:
+      - `frameworks_previous` ← whatever the list was before this call
+      - `frameworks_last_discovered_at` ← UTC ISO timestamp
 
     Returns True if the entry was found and updated, False otherwise.
     Empty input is treated as ["auto"] — we never persist a blank list
@@ -267,12 +288,59 @@ def update_frameworks(
     found = False
     for a in apps:
         if a.id == app_id:
+            if from_discovery:
+                a.frameworks_previous = list(a.frameworks)
+                a.frameworks_last_discovered_at = datetime.now(
+                    timezone.utc
+                ).isoformat(timespec="seconds")
             a.frameworks = cleaned
             found = True
             break
     if found:
         save_registry(apps, path)
     return found
+
+
+_ALLOWED_SCHEMA_STATUSES = {"canonical", "pending_review", "blocked"}
+
+
+def update_schema_status(
+    app_id: str,
+    status: str,
+    *,
+    path: Optional[Path] = None,
+) -> bool:
+    """Persist a schema_status change for one app back to apps.yaml.
+
+    Used by:
+      - scraper.py to auto-promote pending_review → canonical after a
+        clean validator pass (closes the loop the Add-new-app wizard
+        opens when it seeds new apps as pending_review).
+      - admin_ui.py if/when a super admin needs to manually flip a
+        status (e.g. force-block a misbehaving panel).
+
+    Returns True if the entry was found AND the status actually changed.
+    Returns False if the app doesn't exist OR the status was already at
+    the requested value (callers can use the return to decide whether
+    a follow-up commit is worth pushing).
+
+    Refuses unknown statuses — keeps the YAML schema typed.
+    """
+    if status not in _ALLOWED_SCHEMA_STATUSES:
+        raise ValueError(
+            f"schema_status must be one of {sorted(_ALLOWED_SCHEMA_STATUSES)}, "
+            f"got {status!r}"
+        )
+    apps = load_registry(path)
+    changed = False
+    for a in apps:
+        if a.id == app_id and a.schema_status != status:
+            a.schema_status = status
+            changed = True
+            break
+    if changed:
+        save_registry(apps, path)
+    return changed
 
 
 # ---------------------------------------------------------------------

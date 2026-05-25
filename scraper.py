@@ -597,7 +597,12 @@ def iter_frameworks(page, app) -> list[str]:
         # scrapes skip the discovery click.
         try:
             import app_registry
-            app_registry.update_frameworks(app.id, discovered)
+            # from_discovery=True stamps frameworks_previous +
+            # frameworks_last_discovered_at so the admin UI can show
+            # the diff inline next to the Re-discover button.
+            app_registry.update_frameworks(
+                app.id, discovered, from_discovery=True,
+            )
             app.frameworks = discovered
             logging.info(
                 f"🧭 wrote discovered frameworks for {app.id}: {discovered}"
@@ -3349,6 +3354,50 @@ def main():
         )
     except Exception as diag_err:
         logging.debug(f"validator-decision dump skipped: {diag_err}")
+
+    # Auto-promote pending_review → canonical for apps whose ENTIRE set
+    # of reports this run is "ok". The Add-new-app wizard seeds new apps
+    # as pending_review and the original design was for the first clean
+    # scrape to flip them; until now that step didn't exist, so apps
+    # like shopify_gearexchange / michael stayed pending_review forever.
+    #
+    # Invariants:
+    #   - Only promotes UP (pending_review → canonical). Never downgrades
+    #     canonical → pending_review on a single flaky run — that's the
+    #     soft-signal logged a few lines below, not a registry mutation.
+    #   - Skipped if any of the app's reports are blocked OR
+    #     pending_review (be conservative: one questionable report keeps
+    #     it pending).
+    #   - YAML write failure is logged + swallowed; data persistence
+    #     proceeds unaffected.
+    try:
+        import app_registry as _ar_promote
+        reports_by_app: dict[str, list] = {}
+        for r in all_reports:
+            reports_by_app.setdefault(r.app_name, []).append(r)
+        current_status_by_id = {a.id: a.schema_status for a in _ar_promote.all_apps()}
+        promoted: list[str] = []
+        for app_id, reps in reports_by_app.items():
+            if current_status_by_id.get(app_id) != "pending_review":
+                continue
+            if not all(r.status == "ok" for r in reps):
+                continue
+            try:
+                if _ar_promote.update_schema_status(app_id, "canonical"):
+                    promoted.append(app_id)
+            except Exception as promote_err:
+                logging.warning(
+                    f"   ↳ auto-promote: couldn't write canonical for "
+                    f"{app_id}: {promote_err}"
+                )
+        if promoted:
+            logging.info(
+                f"🎓 auto-promote: pending_review → canonical for "
+                f"{sorted(promoted)} (clean validator pass). "
+                f"apps.yaml will be committed by the workflow's add step."
+            )
+    except Exception as auto_err:
+        logging.debug(f"auto-promote step skipped: {auto_err}")
 
     # Per-(app, kind) promotion. Verified live 2026-05-08 on michael:
     # sellers report was OK (254 rows, plan='Free' captured) but

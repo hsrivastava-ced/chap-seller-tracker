@@ -262,11 +262,11 @@ jobs:
         run: |
           git config user.name "chap-scraper-bot"
           git config user.email "chap-scraper-bot@users.noreply.github.com"
-          # Also stage apps.yaml — the scraper writes discovered framework
-          # lists back to it (frameworks: ["auto"] → real list) and we
-          # want that persisted so subsequent runs skip the discovery
-          # click. Other changes to apps.yaml come from admin UI commits
-          # via the GitHub API and are harmless to re-include here.
+          # Also stage apps.yaml — the scraper writes back here for
+          # framework discovery (auto → real list) and schema_status
+          # auto-promote (pending_review → canonical). Without this
+          # both mutations would land on the runner and silently
+          # disappear on the next checkout.
           git add results/ apps.yaml
           if git diff --cached --quiet; then
             echo "No changes in results/ or apps.yaml — skipping commit."
@@ -274,7 +274,19 @@ jobs:
           fi
           STAMP=$(date -u +"%Y-%m-%d_%H-%M-%SZ")
           git commit -m "chore(data): scrape ${STAMP}"
-          git push origin HEAD:main
+          # Retry with pull-rebase on push race. Run #105 (2026-05-23)
+          # died because scrape_michael.yml committed during this
+          # job's 11-minute scrape window and the bare `git push` got
+          # "[rejected] (fetch first)" — fresh data lost, scheduled
+          # run marked red. Bounded retry handles concurrent commits
+          # without papering over a genuinely broken state.
+          for attempt in 1 2 3; do
+            if git push origin HEAD:main; then
+              break
+            fi
+            echo "push attempt $attempt rejected — rebasing on origin/main"
+            git pull --rebase --autostash origin main || true
+          done
 
       - name: Upload logs + debug artifacts on failure
         if: failure()
