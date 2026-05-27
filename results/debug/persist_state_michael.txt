@@ -14,8 +14,8 @@ plan distribution (top 20):
   'Basic'                        43
   'N/A'                          38
   'Starter'                      23
-  'Standard'                     14
-  'Advance'                      8
+  'Standard'                     15
+  'Advance'                      7
   'Custom'                       7
   'Plus'                         3
   'Custom Plan'                  1
