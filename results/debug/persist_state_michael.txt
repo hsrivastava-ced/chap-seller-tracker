@@ -1,16 +1,16 @@
 app: michael
-row_count: 254
+row_count: 255
 
 populated counts (non-empty):
-  plan: 254/254
-  order_count: 254/254
-  product_count: 254/254
-  failed_order_count: 254/254
-  steps_completed: 254/254
-  last_sync: 0/254
+  plan: 255/255
+  order_count: 255/255
+  product_count: 255/255
+  failed_order_count: 255/255
+  steps_completed: 255/255
+  last_sync: 0/255
 
 plan distribution (top 20):
-  'Free'                         116
+  'Free'                         117
   'Basic'                        43
   'N/A'                          38
   'Starter'                      23
@@ -22,4 +22,4 @@ plan distribution (top 20):
   'Premium'                      1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '69fb67f466396ddee706c022', 'store_url': 'www.relevantplay.com relevant-play.myshopify.com', 'username': 'www.relevantplay.com', 'email': 'david@authenticlabs.com', 'platforms': 'Shopify Michael', 'installed_on': '06/05/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '0', 'product_count': '12', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Free', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a0b9d34dc26aa0dd90c8a92', 'store_url': 'weddingcollectibles.com wedding-collectibles.myshopify.com', 'username': 'weddingcollectibles.com', 'email': 'customercare@weddingcollectibles.com', 'platforms': 'Shopify Michael', 'installed_on': '18/05/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '0', 'product_count': '2417', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Free', 'last_sync': '', 'webhooks': 'View', 'action': ''}
