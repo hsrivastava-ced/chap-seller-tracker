@@ -1,18 +1,18 @@
 app: shein
-row_count: 341
+row_count: 342
 
 populated counts (non-empty):
-  plan: 341/341
-  order_count: 341/341
-  product_count: 341/341
-  failed_order_count: 341/341
-  steps_completed: 341/341
-  last_sync: 0/341
+  plan: 342/342
+  order_count: 342/342
+  product_count: 342/342
+  failed_order_count: 342/342
+  steps_completed: 342/342
+  last_sync: 0/342
 
 plan distribution (top 20):
   'N/A'                          222
   'Starter'                      74
-  'Basic'                        21
+  'Basic'                        22
   'Plus'                         5
   'Standard'                     5
   'Beginner'                     2
@@ -29,4 +29,4 @@ plan distribution (top 20):
   'Product Sync'                 1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a187782298751459f061172', 'store_url': 'tyfashion.store', 'username': '4j5aks-v1.myshopify.com', 'email': 'tltampa71@yahoo.com', 'platforms': 'Shopify Shein', 'installed_on': '28/05/2026', 'app_type': 'Custom App', 'source_country': 'United States', 'order_count': '0', 'product_count': '0', 'failed_order_count': '0', 'steps_completed': '2', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a1d5e2f9b7b3f8b6901a542', 'store_url': 'emanarbeauty.com', 'username': '0f6449-87.myshopify.com', 'email': 'info@emanarbeauty.com', 'platforms': 'Shopify Shein', 'installed_on': '01/06/2026', 'app_type': 'Custom App', 'source_country': 'Spain', 'order_count': '0', 'product_count': '692', 'failed_order_count': '0', 'steps_completed': '3', 'plan': 'Basic', 'last_sync': '', 'webhooks': 'View', 'action': ''}
