@@ -1,16 +1,16 @@
 app: shein
-row_count: 341
+row_count: 340
 
 populated counts (non-empty):
-  plan: 341/341
-  order_count: 341/341
-  product_count: 341/341
-  failed_order_count: 341/341
-  steps_completed: 341/341
-  last_sync: 0/341
+  plan: 340/340
+  order_count: 340/340
+  product_count: 340/340
+  failed_order_count: 340/340
+  steps_completed: 340/340
+  last_sync: 0/340
 
 plan distribution (top 20):
-  'N/A'                          221
+  'N/A'                          220
   'Starter'                      74
   'Basic'                        22
   'Plus'                         5
@@ -25,7 +25,7 @@ plan distribution (top 20):
   'Combo with Tiktok Plan 250'   1
   'Custom plan 349'              1
   'Discounted Plan 870'          1
-  'Custom plan 8000'             1
+  'Custom plan 4000'             1
   'Product Sync'                 1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
