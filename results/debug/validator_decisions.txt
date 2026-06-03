@@ -30,16 +30,15 @@
       · Current uninstalls: 345 rows.
       · Previous uninstalls: 345 rows. Drop: 0.0% (soft=20%, hard=50%).
 
-=== shopify_temu_eu / sellers → BLOCKED ===
+=== shopify_temu_eu / sellers → OK ===
   - customize_grid: ok
       · Observed 11 column options in Customize Grid.
       · Required: 4 (missing: 0)
       · Unexpected extras: 0
   - pagination: ok
-  - row_count_sellers: blocked
-      · Current sellers: 20 rows.
-      · Previous sellers: 42 rows. Drop: 52.4% (soft=20%, hard=50%).
-      → Row count dropped >50% vs previous run. Likely a silent login/landing failure — keep last-good CSV.
+  - row_count_sellers: ok
+      · Current sellers: 42 rows.
+      · Previous sellers: 42 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shopify_temu_eu / uninstalls → OK ===
   - pagination: ok
