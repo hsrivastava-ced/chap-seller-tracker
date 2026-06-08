@@ -1,13 +1,13 @@
 app: shopify_temu_eu
-row_count: 72
+row_count: 73
 
 populated counts (non-empty):
-  plan: 72/72
-  order_count: 72/72
-  product_count: 72/72
-  failed_order_count: 72/72
-  steps_completed: 72/72
-  last_sync: 0/72
+  plan: 73/73
+  order_count: 73/73
+  product_count: 73/73
+  failed_order_count: 73/73
+  steps_completed: 73/73
+  last_sync: 0/73
 
 plan distribution (top 20):
   'N/A'                          43
@@ -15,10 +15,10 @@ plan distribution (top 20):
   'Regular'                      4
   'Premium'                      3
   'Standard'                     3
+  'Trial'                        2
   'Elite'                        2
-  'Trial'                        1
   'Elite Yearly'                 1
   'Custom Yearly'                1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a101d0f765d4288210e32f2', 'store_url': 'plus-one-supplements.myshopify.com', 'username': 'giulio.ramazio@gmail.com', 'email': 'giulio.ramazio@gmail.com', 'platforms': 'Shopify Temu', 'installed_on': '22/05/2026', 'app_type': '', 'source_country': 'Italy', 'order_count': '0', 'product_count': '87', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a269613697d2c5ae30f4732', 'store_url': 'zjcpy3-9f.myshopify.com', 'username': 'gokul@ghuroobnet.com', 'email': 'gokul@ghuroobnet.com', 'platforms': 'Shopify Temu', 'installed_on': '08/06/2026', 'app_type': '', 'source_country': 'United Kingdom', 'order_count': '0', 'product_count': '44', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Trial', 'last_sync': '', 'webhooks': 'View', 'action': ''}
