@@ -11,11 +11,12 @@ populated counts (non-empty):
 
 plan distribution (top 20):
   'N/A'                          58
-  'Starter'                      16
+  'Starter'                      15
   'Standard'                     2
   'Premium'                      2
   'Trial'                        1
   'Yearly Custom Plan'           1
+  'Regular'                      1
   'Custom Yearly'                1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']

@@ -1,21 +1,21 @@
 app: shein
-row_count: 339
+row_count: 341
 
 populated counts (non-empty):
-  plan: 339/339
-  order_count: 339/339
-  product_count: 339/339
-  failed_order_count: 339/339
-  steps_completed: 339/339
-  last_sync: 0/339
+  plan: 341/341
+  order_count: 341/341
+  product_count: 341/341
+  failed_order_count: 341/341
+  steps_completed: 341/341
+  last_sync: 0/341
 
 plan distribution (top 20):
-  'N/A'                          221
+  'N/A'                          222
   'Starter'                      71
   'Basic'                        24
   'Plus'                         5
   'Standard'                     5
-  'Beginner'                     2
+  'Beginner'                     3
   'Enterprise Starter'           2
   'Custom plan 380'              1
   'Enterprise Plus'              1
@@ -28,4 +28,4 @@ plan distribution (top 20):
   'Custom plan 4000'             1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a22b2b98fa81e8935064c82', 'store_url': 'emanarbeauty.com', 'username': '0f6449-87.myshopify.com', 'email': 'info@emanarbeauty.com', 'platforms': 'Shopify Shein', 'installed_on': '05/06/2026', 'app_type': 'Custom App', 'source_country': 'Spain', 'order_count': '0', 'product_count': '701', 'failed_order_count': '0', 'steps_completed': '3', 'plan': 'Basic', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a27d8d461480a3e640d37f2', 'store_url': 'saanchi-collections.myshopify.com', 'username': 'saanchi-collections.myshopify.com', 'email': 'kgairola@threecolts.com', 'platforms': 'Shopify Shein', 'installed_on': '09/06/2026', 'app_type': 'Sales Channel App', 'source_country': 'India', 'order_count': '0', 'product_count': '51420', 'failed_order_count': '0', 'steps_completed': '4', 'plan': 'Beginner', 'last_sync': '', 'webhooks': 'View', 'action': ''}
