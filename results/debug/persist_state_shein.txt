@@ -15,8 +15,9 @@ plan distribution (top 20):
   'Basic'                        24
   'Plus'                         5
   'Standard'                     5
-  'Beginner'                     3
+  'Beginner'                     2
   'Enterprise Starter'           2
+  'Growth'                       1
   'Custom plan 380'              1
   'Enterprise Plus'              1
   'Combo with Tiktok Plan 300'   1
@@ -28,4 +29,4 @@ plan distribution (top 20):
   'Custom plan 4000'             1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a27d8d461480a3e640d37f2', 'store_url': 'saanchi-collections.myshopify.com', 'username': 'saanchi-collections.myshopify.com', 'email': 'kgairola@threecolts.com', 'platforms': 'Shopify Shein', 'installed_on': '09/06/2026', 'app_type': 'Sales Channel App', 'source_country': 'India', 'order_count': '0', 'product_count': '51420', 'failed_order_count': '0', 'steps_completed': '4', 'plan': 'Beginner', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a27d8d461480a3e640d37f2', 'store_url': 'saanchi-collections.myshopify.com', 'username': 'saanchi-collections.myshopify.com', 'email': 'kgairola@threecolts.com', 'platforms': 'Shopify Shein', 'installed_on': '09/06/2026', 'app_type': 'Sales Channel App', 'source_country': 'India', 'order_count': '34', 'product_count': '51424', 'failed_order_count': '32', 'steps_completed': '4', 'plan': 'Growth', 'last_sync': '', 'webhooks': 'View', 'action': ''}
