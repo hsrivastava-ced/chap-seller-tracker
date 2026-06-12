@@ -1,20 +1,20 @@
 app: michael
-row_count: 255
+row_count: 256
 
 populated counts (non-empty):
-  plan: 255/255
-  order_count: 255/255
-  product_count: 255/255
-  failed_order_count: 255/255
-  steps_completed: 255/255
-  last_sync: 0/255
+  plan: 256/256
+  order_count: 256/256
+  product_count: 256/256
+  failed_order_count: 256/256
+  steps_completed: 256/256
+  last_sync: 0/256
 
 plan distribution (top 20):
-  'Free'                         117
+  'Free'                         118
   'Basic'                        43
-  'N/A'                          36
+  'N/A'                          37
   'Starter'                      24
-  'Standard'                     16
+  'Standard'                     15
   'Advance'                      7
   'Custom'                       7
   'Plus'                         3
@@ -22,4 +22,4 @@ plan distribution (top 20):
   'Premium'                      1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a0b9d34dc26aa0dd90c8a92', 'store_url': 'weddingcollectibles.com wedding-collectibles.myshopify.com', 'username': 'weddingcollectibles.com', 'email': 'customercare@weddingcollectibles.com', 'platforms': 'Shopify Michael', 'installed_on': '18/05/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '0', 'product_count': '2417', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Free', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a2c3d2fd6467ba31c0f2cc4', 'store_url': 'usfabricshop.com 3ac0f1-2.myshopify.com', 'username': 'usfabricshop.com', 'email': 'eva@usfabricshop.com', 'platforms': 'Shopify Michael', 'installed_on': '12/06/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '0', 'product_count': '25311', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Free', 'last_sync': '', 'webhooks': 'View', 'action': ''}
