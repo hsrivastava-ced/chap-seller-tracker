@@ -5,13 +5,13 @@
       · Unexpected extras: 0
   - pagination: ok
   - row_count_sellers: ok
-      · Current sellers: 81 rows.
-      · Previous sellers: 81 rows. Drop: 0.0% (soft=20%, hard=50%).
+      · Current sellers: 80 rows.
+      · Previous sellers: 81 rows. Drop: 1.2% (soft=20%, hard=50%).
 
 === shopify_temu / uninstalls → OK ===
   - pagination: ok
   - row_count_uninstalls: ok
-      · Current uninstalls: 122 rows.
+      · Current uninstalls: 124 rows.
       · Previous uninstalls: 122 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shein / sellers → OK ===
@@ -22,7 +22,7 @@
   - pagination: ok
   - row_count_sellers: ok
       · Current sellers: 340 rows.
-      · Previous sellers: 339 rows. Drop: 0.0% (soft=20%, hard=50%).
+      · Previous sellers: 340 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shein / uninstalls → OK ===
   - pagination: ok
@@ -30,21 +30,24 @@
       · Current uninstalls: 358 rows.
       · Previous uninstalls: 358 rows. Drop: 0.0% (soft=20%, hard=50%).
 
-=== shopify_temu_eu / sellers → OK ===
+=== shopify_temu_eu / sellers → BLOCKED ===
   - customize_grid: ok
       · Observed 11 column options in Customize Grid.
       · Required: 4 (missing: 0)
       · Unexpected extras: 0
   - pagination: ok
-  - row_count_sellers: ok
-      · Current sellers: 74 rows.
-      · Previous sellers: 74 rows. Drop: 0.0% (soft=20%, hard=50%).
+  - row_count_sellers: blocked
+      · Current sellers: 31 rows.
+      · Previous sellers: 74 rows. Drop: 58.1% (soft=20%, hard=50%).
+      → Row count dropped >50% vs previous run. Likely a silent login/landing failure — keep last-good CSV.
 
-=== shopify_temu_eu / uninstalls → OK ===
+=== shopify_temu_eu / uninstalls → BLOCKED ===
   - pagination: ok
-  - row_count_uninstalls: ok
-      · Current uninstalls: 133 rows.
-      · Previous uninstalls: 133 rows. Drop: 0.0% (soft=20%, hard=50%).
+      · No pagination trace captured.
+  - row_count_uninstalls: blocked
+      · Current uninstalls: 0 rows.
+      · Previous uninstalls: 133 rows. Drop: 100.0% (soft=20%, hard=50%).
+      → Row count dropped >50% vs previous run. Likely a silent login/landing failure — keep last-good CSV.
 
 === shein_woocommerce / sellers → OK ===
   - customize_grid: ok
