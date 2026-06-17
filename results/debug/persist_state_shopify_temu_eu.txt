@@ -1,16 +1,22 @@
 app: shopify_temu_eu
-row_count: 31
+row_count: 51
 
 populated counts (non-empty):
-  plan: 0/31
-  order_count: 0/31
-  product_count: 31/31
-  failed_order_count: 0/31
-  steps_completed: 31/31
-  last_sync: 0/31
+  plan: 51/51
+  order_count: 51/51
+  product_count: 51/51
+  failed_order_count: 51/51
+  steps_completed: 51/51
+  last_sync: 0/51
 
 plan distribution (top 20):
-  ''                             31
+  'N/A'                          31
+  'Starter'                      12
+  'Trial'                        2
+  'Elite'                        2
+  'Standard'                     2
+  'Regular'                      1
+  'Premium'                      1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a269613697d2c5ae30f4732', 'store_url': 'zjcpy3-9f.myshopify.com', 'username': 'gokul@ghuroobnet.com', 'email': 'gokul@ghuroobnet.com', 'platforms': 'Shopify Temu', 'installed_on': '08/06/2026', 'app_type': '', 'source_country': 'United Kingdom', 'order_count': '', 'product_count': '50', 'failed_order_count': '', 'steps_completed': '0', 'plan': '', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a269613697d2c5ae30f4732', 'store_url': 'zjcpy3-9f.myshopify.com', 'username': 'gokul@ghuroobnet.com', 'email': 'gokul@ghuroobnet.com', 'platforms': 'Shopify Temu', 'installed_on': '08/06/2026', 'app_type': '', 'source_country': 'United Kingdom', 'order_count': '0', 'product_count': '50', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Trial', 'last_sync': '', 'webhooks': 'View', 'action': ''}
