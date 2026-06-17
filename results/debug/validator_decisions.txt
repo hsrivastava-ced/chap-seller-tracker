@@ -27,19 +27,18 @@
 === shein / uninstalls → OK ===
   - pagination: ok
   - row_count_uninstalls: ok
-      · Current uninstalls: 358 rows.
+      · Current uninstalls: 360 rows.
       · Previous uninstalls: 358 rows. Drop: 0.0% (soft=20%, hard=50%).
 
-=== shopify_temu_eu / sellers → PENDING_REVIEW ===
+=== shopify_temu_eu / sellers → OK ===
   - customize_grid: ok
       · Observed 11 column options in Customize Grid.
       · Required: 4 (missing: 0)
       · Unexpected extras: 0
   - pagination: ok
-  - row_count_sellers: pending_review
-      · Current sellers: 51 rows.
-      · Previous sellers: 74 rows. Drop: 31.1% (soft=20%, hard=50%).
-      → Row count dropped 31.1% vs previous run. Promoted but flagged for operator review.
+  - row_count_sellers: ok
+      · Current sellers: 74 rows.
+      · Previous sellers: 51 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shopify_temu_eu / uninstalls → OK ===
   - pagination: ok

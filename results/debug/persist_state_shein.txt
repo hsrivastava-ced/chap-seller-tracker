@@ -10,13 +10,14 @@ populated counts (non-empty):
   last_sync: 0/340
 
 plan distribution (top 20):
-  'N/A'                          223
+  'N/A'                          222
   'Starter'                      70
   'Basic'                        24
   'Plus'                         5
   'Standard'                     5
   'Beginner'                     2
   'Enterprise Starter'           2
+  'Growth'                       1
   'Custom plan 380'              1
   'Enterprise Plus'              1
   'Combo with Tiktok Plan 300'   1
@@ -28,4 +29,4 @@ plan distribution (top 20):
   'Custom plan 4000'             1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a311c08bb709ede3c064f12', 'store_url': 'www.kremtik.com', 'username': 'chrisweet.myshopify.com', 'email': 'contacto@kremtik.com', 'platforms': 'Shopify Shein', 'installed_on': '16/06/2026', 'app_type': 'Custom App', 'source_country': 'Spain', 'order_count': '0', 'product_count': '1452', 'failed_order_count': '0', 'steps_completed': '3', 'plan': 'Basic', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a32875251da63368402d642', 'store_url': 'priyanshu-test-56mx71et.myshopify.com', 'username': 'priyanshu-test-56mx71et.myshopify.com', 'email': 'hsahu@threecolts.com', 'platforms': 'Shopify Shein', 'installed_on': '17/06/2026', 'app_type': 'Sales Channel App', 'source_country': 'United States', 'order_count': '0', 'product_count': '15', 'failed_order_count': '0', 'steps_completed': '4', 'plan': 'Growth', 'last_sync': '', 'webhooks': 'View', 'action': ''}
