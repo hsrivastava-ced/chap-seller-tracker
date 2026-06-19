@@ -21,7 +21,7 @@
       · Unexpected extras: 0
   - pagination: ok
   - row_count_sellers: ok
-      · Current sellers: 340 rows.
+      · Current sellers: 341 rows.
       · Previous sellers: 340 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shein / uninstalls → OK ===
