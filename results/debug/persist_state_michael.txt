@@ -11,15 +11,15 @@ populated counts (non-empty):
 
 plan distribution (top 20):
   'Free'                         117
-  'Basic'                        42
+  'Basic'                        43
   'N/A'                          39
   'Starter'                      26
   'Standard'                     14
   'Advance'                      7
-  'Custom'                       7
+  'Custom'                       6
   'Plus'                         3
   'Custom Plan'                  1
   'Premium'                      1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a2c3d2fd6467ba31c0f2cc4', 'store_url': 'usfabricshop.com 3ac0f1-2.myshopify.com', 'username': 'usfabricshop.com', 'email': 'eva@usfabricshop.com', 'platforms': 'Shopify Michael', 'installed_on': '12/06/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '0', 'product_count': '25514', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Free', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a2c3d2fd6467ba31c0f2cc4', 'store_url': 'usfabricshop.com 3ac0f1-2.myshopify.com', 'username': 'usfabricshop.com', 'email': 'eva@usfabricshop.com', 'platforms': 'Shopify Michael', 'installed_on': '12/06/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '0', 'product_count': '25530', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Free', 'last_sync': '', 'webhooks': 'View', 'action': ''}
