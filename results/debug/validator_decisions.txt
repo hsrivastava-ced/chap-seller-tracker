@@ -8,11 +8,13 @@
       · Current sellers: 80 rows.
       · Previous sellers: 80 rows. Drop: 0.0% (soft=20%, hard=50%).
 
-=== shopify_temu / uninstalls → OK ===
+=== shopify_temu / uninstalls → BLOCKED ===
   - pagination: ok
-  - row_count_uninstalls: ok
-      · Current uninstalls: 124 rows.
-      · Previous uninstalls: 124 rows. Drop: 0.0% (soft=20%, hard=50%).
+      · No pagination trace captured.
+  - row_count_uninstalls: blocked
+      · Current uninstalls: 0 rows.
+      · Previous uninstalls: 124 rows. Drop: 100.0% (soft=20%, hard=50%).
+      → Row count dropped >50% vs previous run. Likely a silent login/landing failure — keep last-good CSV.
 
 === shein / sellers → OK ===
   - customize_grid: ok
@@ -22,7 +24,7 @@
   - pagination: ok
   - row_count_sellers: ok
       · Current sellers: 342 rows.
-      · Previous sellers: 341 rows. Drop: 0.0% (soft=20%, hard=50%).
+      · Previous sellers: 342 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shein / uninstalls → OK ===
   - pagination: ok
