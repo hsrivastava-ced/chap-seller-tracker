@@ -1,16 +1,16 @@
 app: shein
-row_count: 341
+row_count: 342
 
 populated counts (non-empty):
-  plan: 341/341
-  order_count: 341/341
-  product_count: 341/341
-  failed_order_count: 341/341
-  steps_completed: 341/341
-  last_sync: 0/341
+  plan: 342/342
+  order_count: 342/342
+  product_count: 342/342
+  failed_order_count: 342/342
+  steps_completed: 342/342
+  last_sync: 0/342
 
 plan distribution (top 20):
-  'N/A'                          223
+  'N/A'                          224
   'Starter'                      70
   'Basic'                        24
   'Plus'                         5
@@ -29,4 +29,4 @@ plan distribution (top 20):
   'Custom plan 4000'             1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a32875251da63368402d642', 'store_url': 'priyanshu-test-56mx71et.myshopify.com', 'username': 'priyanshu-test-56mx71et.myshopify.com', 'email': 'hsahu@threecolts.com', 'platforms': 'Shopify Shein', 'installed_on': '17/06/2026', 'app_type': 'Sales Channel App', 'source_country': 'United States', 'order_count': '0', 'product_count': '15', 'failed_order_count': '0', 'steps_completed': '4', 'plan': 'Growth', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a39b923afb0285a06060222', 'store_url': 'greenhec.de', 'username': '7de1d3-2.myshopify.com', 'email': 'shopify@grooshandel.de', 'platforms': 'Shopify Shein', 'installed_on': '22/06/2026', 'app_type': 'Custom App', 'source_country': 'Germany', 'order_count': '0', 'product_count': '0', 'failed_order_count': '0', 'steps_completed': '2', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}
