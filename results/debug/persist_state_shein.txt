@@ -1,13 +1,13 @@
 app: shein
-row_count: 343
+row_count: 342
 
 populated counts (non-empty):
-  plan: 343/343
-  order_count: 343/343
-  product_count: 343/343
-  failed_order_count: 343/343
-  steps_completed: 343/343
-  last_sync: 0/343
+  plan: 342/342
+  order_count: 342/342
+  product_count: 342/342
+  failed_order_count: 342/342
+  steps_completed: 342/342
+  last_sync: 0/342
 
 plan distribution (top 20):
   'N/A'                          223
@@ -15,10 +15,10 @@ plan distribution (top 20):
   'Basic'                        25
   'Plus'                         5
   'Standard'                     5
-  'Custom plan 380'              2
   'Beginner'                     2
   'Enterprise Starter'           2
   'Growth'                       1
+  'Custom plan 380'              1
   'Enterprise Plus'              1
   'Combo with Tiktok Plan 300'   1
   'Enterprise Basic'             1
@@ -29,4 +29,4 @@ plan distribution (top 20):
   'Custom plan 4000'             1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a3b80480b297c32b2076d72', 'store_url': 'sheinregression.myshopify.com', 'username': 'sheinregression.myshopify.com', 'email': 'ubaidmusvi210@gmail.com', 'platforms': 'Shopify Shein', 'installed_on': '24/06/2026', 'app_type': 'Custom App', 'source_country': 'India', 'order_count': '0', 'product_count': '6', 'failed_order_count': '0', 'steps_completed': '3', 'plan': 'Custom plan 380', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a39b923afb0285a06060222', 'store_url': 'greenhec.de', 'username': '7de1d3-2.myshopify.com', 'email': 'shopify@grooshandel.de', 'platforms': 'Shopify Shein', 'installed_on': '22/06/2026', 'app_type': 'Custom App', 'source_country': 'Germany', 'order_count': '0', 'product_count': '0', 'failed_order_count': '0', 'steps_completed': '2', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}
