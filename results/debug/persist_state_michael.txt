@@ -1,16 +1,16 @@
 app: michael
-row_count: 257
+row_count: 259
 
 populated counts (non-empty):
-  plan: 257/257
-  order_count: 257/257
-  product_count: 257/257
-  failed_order_count: 257/257
-  steps_completed: 257/257
-  last_sync: 0/257
+  plan: 259/259
+  order_count: 259/259
+  product_count: 259/259
+  failed_order_count: 259/259
+  steps_completed: 259/259
+  last_sync: 0/259
 
 plan distribution (top 20):
-  'Free'                         116
+  'Free'                         118
   'Basic'                        43
   'N/A'                          40
   'Starter'                      27
@@ -22,4 +22,4 @@ plan distribution (top 20):
   'Premium'                      1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a2c3d2fd6467ba31c0f2cc4', 'store_url': 'usfabricshop.com 3ac0f1-2.myshopify.com', 'username': 'usfabricshop.com', 'email': 'eva@usfabricshop.com', 'platforms': 'Shopify Michael', 'installed_on': '12/06/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '0', 'product_count': '25700', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Free', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a3d4706976b7ef1140caf92', 'store_url': 'www.imagesupply.com image-supply.myshopify.com', 'username': 'www.imagesupply.com', 'email': 'michaelg@imagesupply.com', 'platforms': 'Shopify Michael', 'installed_on': '25/06/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '0', 'product_count': '1671', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Free', 'last_sync': '', 'webhooks': 'View', 'action': ''}
