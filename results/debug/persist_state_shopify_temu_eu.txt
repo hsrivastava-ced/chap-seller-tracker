@@ -6,7 +6,7 @@ populated counts (non-empty):
   order_count: 74/74
   product_count: 74/74
   failed_order_count: 74/74
-  steps_completed: 74/74
+  steps_completed: 0/74
   last_sync: 0/74
 
 plan distribution (top 20):
@@ -20,4 +20,4 @@ plan distribution (top 20):
   'Custom Yearly'                1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a269613697d2c5ae30f4732', 'store_url': 'zjcpy3-9f.myshopify.com', 'username': 'gokul@ghuroobnet.com', 'email': 'gokul@ghuroobnet.com', 'platforms': 'Shopify Temu', 'installed_on': '08/06/2026', 'app_type': '', 'source_country': 'United Kingdom', 'order_count': '0', 'product_count': '50', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a269613697d2c5ae30f4732', 'store_url': 'zjcpy3-9f.myshopify.com', 'username': 'gokul@ghuroobnet.com', 'email': 'gokul@ghuroobnet.com', 'platforms': 'Shopify Temu', 'installed_on': '08/06/2026', 'app_type': '', 'source_country': 'United Kingdom', 'order_count': '0', 'product_count': '50', 'failed_order_count': '0', 'steps_completed': '', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}
