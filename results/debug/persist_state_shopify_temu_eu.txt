@@ -1,23 +1,23 @@
 app: shopify_temu_eu
-row_count: 74
+row_count: 43
 
 populated counts (non-empty):
-  plan: 74/74
-  order_count: 74/74
-  product_count: 74/74
-  failed_order_count: 74/74
-  steps_completed: 74/74
-  last_sync: 0/74
+  plan: 43/43
+  order_count: 43/43
+  product_count: 43/43
+  failed_order_count: 43/43
+  steps_completed: 43/43
+  last_sync: 0/43
 
 plan distribution (top 20):
-  'N/A'                          48
-  'Starter'                      14
+  'N/A'                          25
+  'Starter'                      7
   'Regular'                      3
   'Premium'                      3
   'Elite'                        2
-  'Standard'                     2
   'Elite Yearly'                 1
   'Custom Yearly'                1
+  'Standard'                     1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
 first_row repr (truncated): {'seller_id': '6a269613697d2c5ae30f4732', 'store_url': 'zjcpy3-9f.myshopify.com', 'username': 'gokul@ghuroobnet.com', 'email': 'gokul@ghuroobnet.com', 'platforms': 'Shopify Temu', 'installed_on': '08/06/2026', 'app_type': '', 'source_country': 'United Kingdom', 'order_count': '0', 'product_count': '50', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}
