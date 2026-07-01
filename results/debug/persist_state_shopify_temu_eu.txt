@@ -1,22 +1,20 @@
 app: shopify_temu_eu
-row_count: 43
+row_count: 51
 
 populated counts (non-empty):
-  plan: 43/43
-  order_count: 43/43
-  product_count: 43/43
-  failed_order_count: 43/43
-  steps_completed: 43/43
-  last_sync: 0/43
+  plan: 51/51
+  order_count: 51/51
+  product_count: 51/51
+  failed_order_count: 51/51
+  steps_completed: 51/51
+  last_sync: 0/51
 
 plan distribution (top 20):
-  'N/A'                          25
-  'Starter'                      7
-  'Regular'                      3
-  'Premium'                      3
+  'N/A'                          34
+  'Starter'                      12
   'Elite'                        2
-  'Elite Yearly'                 1
-  'Custom Yearly'                1
+  'Regular'                      1
+  'Premium'                      1
   'Standard'                     1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']

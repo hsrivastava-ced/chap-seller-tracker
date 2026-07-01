@@ -1,17 +1,17 @@
 app: shein
-row_count: 340
+row_count: 339
 
 populated counts (non-empty):
-  plan: 340/340
-  order_count: 340/340
-  product_count: 340/340
-  failed_order_count: 340/340
-  steps_completed: 340/340
-  last_sync: 0/340
+  plan: 339/339
+  order_count: 339/339
+  product_count: 339/339
+  failed_order_count: 339/339
+  steps_completed: 339/339
+  last_sync: 0/339
 
 plan distribution (top 20):
   'N/A'                          224
-  'Starter'                      70
+  'Starter'                      69
   'Basic'                        23
   'Plus'                         5
   'Standard'                     4
