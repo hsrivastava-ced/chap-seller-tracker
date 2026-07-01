@@ -11,10 +11,10 @@ populated counts (non-empty):
 
 plan distribution (top 20):
   'N/A'                          224
-  'Starter'                      69
+  'Starter'                      68
   'Basic'                        23
+  'Standard'                     5
   'Plus'                         5
-  'Standard'                     4
   'Beginner'                     2
   'Enterprise Starter'           2
   'Growth'                       1
