@@ -1,17 +1,17 @@
 app: shein_woocommerce
-row_count: 43
+row_count: 20
 
 populated counts (non-empty):
-  plan: 43/43
-  order_count: 43/43
-  product_count: 43/43
-  failed_order_count: 43/43
-  steps_completed: 43/43
-  last_sync: 0/43
+  plan: 20/20
+  order_count: 20/20
+  product_count: 20/20
+  failed_order_count: 20/20
+  steps_completed: 20/20
+  last_sync: 0/20
 
 plan distribution (top 20):
-  'N/A'                          30
-  'Beginner Plan'                13
+  'N/A'                          16
+  'Beginner Plan'                4
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
 first_row repr (truncated): {'seller_id': '6a05dc79ad77425a7d0ff83c', 'store_url': 'https://lojadonami.com.br', 'username': 'lojadonami.com.br', 'email': 'riseonsolutionss@gmail.com', 'platforms': 'Woocommerce', 'installed_on': '14/05/2026', 'app_type': '', 'source_country': 'N/A', 'order_count': 'N/A', 'product_count': 'N/A', 'failed_order_count': 'N/A', 'steps_completed': '1', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}
