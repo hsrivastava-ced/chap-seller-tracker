@@ -22,7 +22,7 @@
   - pagination: ok
   - row_count_sellers: ok
       · Current sellers: 338 rows.
-      · Previous sellers: 339 rows. Drop: 0.3% (soft=20%, hard=50%).
+      · Previous sellers: 338 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shein / uninstalls → OK ===
   - pagination: ok
