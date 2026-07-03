@@ -1,13 +1,12 @@
-=== shopify_temu / sellers → BLOCKED ===
+=== shopify_temu / sellers → OK ===
   - customize_grid: ok
       · Observed 11 column options in Customize Grid.
       · Required: 4 (missing: 0)
       · Unexpected extras: 0
   - pagination: ok
-  - row_count_sellers: blocked
-      · Current sellers: 20 rows.
-      · Previous sellers: 80 rows. Drop: 75.0% (soft=20%, hard=50%).
-      → Row count dropped >50% vs previous run. Likely a silent login/landing failure — keep last-good CSV.
+  - row_count_sellers: ok
+      · Current sellers: 80 rows.
+      · Previous sellers: 80 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shopify_temu / uninstalls → OK ===
   - pagination: ok
@@ -15,22 +14,21 @@
       · Current uninstalls: 124 rows.
       · Previous uninstalls: 124 rows. Drop: 0.0% (soft=20%, hard=50%).
 
-=== shein / sellers → BLOCKED ===
+=== shein / sellers → OK ===
   - customize_grid: ok
       · Observed 12 column options in Customize Grid.
       · Required: 4 (missing: 0)
       · Unexpected extras: 0
   - pagination: ok
-  - row_count_sellers: blocked
-      · Current sellers: 20 rows.
-      · Previous sellers: 339 rows. Drop: 94.1% (soft=20%, hard=50%).
-      → Row count dropped >50% vs previous run. Likely a silent login/landing failure — keep last-good CSV.
+  - row_count_sellers: ok
+      · Current sellers: 338 rows.
+      · Previous sellers: 339 rows. Drop: 0.3% (soft=20%, hard=50%).
 
 === shein / uninstalls → OK ===
   - pagination: ok
   - row_count_uninstalls: ok
       · Current uninstalls: 371 rows.
-      · Previous uninstalls: 369 rows. Drop: 0.0% (soft=20%, hard=50%).
+      · Previous uninstalls: 371 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shopify_temu_eu / sellers → OK ===
   - customize_grid: ok
@@ -48,16 +46,15 @@
       · Current uninstalls: 133 rows.
       · Previous uninstalls: 133 rows. Drop: 0.0% (soft=20%, hard=50%).
 
-=== shein_woocommerce / sellers → BLOCKED ===
+=== shein_woocommerce / sellers → OK ===
   - customize_grid: ok
       · Observed 11 column options in Customize Grid.
       · Required: 4 (missing: 0)
       · Unexpected extras: 0
   - pagination: ok
-  - row_count_sellers: blocked
-      · Current sellers: 20 rows.
-      · Previous sellers: 43 rows. Drop: 53.5% (soft=20%, hard=50%).
-      → Row count dropped >50% vs previous run. Likely a silent login/landing failure — keep last-good CSV.
+  - row_count_sellers: ok
+      · Current sellers: 43 rows.
+      · Previous sellers: 43 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shein_woocommerce / uninstalls → OK ===
   - pagination: ok
