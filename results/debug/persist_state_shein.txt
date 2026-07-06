@@ -1,13 +1,13 @@
 app: shein
-row_count: 338
+row_count: 337
 
 populated counts (non-empty):
-  plan: 338/338
-  order_count: 338/338
-  product_count: 338/338
-  failed_order_count: 338/338
-  steps_completed: 338/338
-  last_sync: 0/338
+  plan: 337/337
+  order_count: 337/337
+  product_count: 337/337
+  failed_order_count: 337/337
+  steps_completed: 337/337
+  last_sync: 0/337
 
 plan distribution (top 20):
   'N/A'                          221
@@ -16,12 +16,12 @@ plan distribution (top 20):
   'Standard'                     5
   'Plus'                         5
   'Beginner'                     2
-  'Enterprise Starter'           2
   'Growth'                       1
   'Custom plan 380'              1
   'Enterprise Plus'              1
   'Combo with Tiktok Plan 300'   1
   'Enterprise Basic'             1
+  'Enterprise Starter'           1
   'Discounted Plan 999'          1
   'Combo with Tiktok Plan 250'   1
   'Custom plan 349'              1
