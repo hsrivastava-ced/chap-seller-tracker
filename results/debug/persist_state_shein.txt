@@ -1,32 +1,16 @@
 app: shein
-row_count: 337
+row_count: 256
 
 populated counts (non-empty):
-  plan: 337/337
-  order_count: 337/337
-  product_count: 337/337
-  failed_order_count: 337/337
-  steps_completed: 337/337
-  last_sync: 0/337
+  plan: 0/256
+  order_count: 0/256
+  product_count: 256/256
+  failed_order_count: 0/256
+  steps_completed: 0/256
+  last_sync: 0/256
 
 plan distribution (top 20):
-  'N/A'                          221
-  'Starter'                      68
-  'Basic'                        25
-  'Standard'                     5
-  'Plus'                         5
-  'Beginner'                     2
-  'Growth'                       1
-  'Custom plan 380'              1
-  'Enterprise Plus'              1
-  'Combo with Tiktok Plan 300'   1
-  'Enterprise Basic'             1
-  'Enterprise Starter'           1
-  'Discounted Plan 999'          1
-  'Combo with Tiktok Plan 250'   1
-  'Custom plan 349'              1
-  'Discounted Plan 870'          1
-  'Custom plan 4000'             1
+  ''                             256
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a39b923afb0285a06060222', 'store_url': 'greenhec.de', 'username': '7de1d3-2.myshopify.com', 'email': 'shopify@grooshandel.de', 'platforms': 'Shopify Shein', 'installed_on': '22/06/2026', 'app_type': 'Custom App', 'source_country': 'Germany', 'order_count': '0', 'product_count': '0', 'failed_order_count': '0', 'steps_completed': '2', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a39b923afb0285a06060222', 'store_url': 'greenhec.de', 'username': '7de1d3-2.myshopify.com', 'email': 'shopify@grooshandel.de', 'platforms': 'Shopify Shein', 'installed_on': '22/06/2026', 'app_type': 'Custom App', 'source_country': 'Germany', 'order_count': '', 'product_count': '0', 'failed_order_count': '', 'steps_completed': '', 'plan': '', 'last_sync': '', 'webhooks': 'View', 'action': ''}
