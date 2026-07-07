@@ -1,18 +1,18 @@
 app: shopify_gearexchange
-row_count: 12
+row_count: 14
 
 populated counts (non-empty):
-  plan: 12/12
-  order_count: 12/12
-  product_count: 12/12
-  failed_order_count: 12/12
-  steps_completed: 12/12
-  last_sync: 0/12
+  plan: 14/14
+  order_count: 14/14
+  product_count: 14/14
+  failed_order_count: 14/14
+  steps_completed: 14/14
+  last_sync: 0/14
 
 plan distribution (top 20):
-  'Bronze'                       7
+  'Bronze'                       8
   'Silver'                       4
-  'N/A'                          1
+  'N/A'                          2
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a3eb122246e00f3a2055bcb', 'store_url': 'malibumusic.com', 'username': 'Jeff@malibumusic.com', 'email': 'jeff@malibumusic.com', 'platforms': 'Shopify Gearexchange', 'installed_on': '26/06/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '0', 'product_count': '69', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Bronze', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a4d542babd54a5cf008a064', 'store_url': 'wadsworthmusic.com', 'username': 'joleary@wadsworthmusic.com', 'email': 'joleary@wadsworthmusic.com', 'platforms': 'Shopify Gearexchange', 'installed_on': '07/07/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '0', 'product_count': '10', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}
