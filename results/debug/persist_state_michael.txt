@@ -1,16 +1,16 @@
 app: michael
-row_count: 259
+row_count: 260
 
 populated counts (non-empty):
-  plan: 259/259
-  order_count: 259/259
-  product_count: 259/259
-  failed_order_count: 259/259
-  steps_completed: 259/259
-  last_sync: 0/259
+  plan: 260/260
+  order_count: 260/260
+  product_count: 260/260
+  failed_order_count: 260/260
+  steps_completed: 260/260
+  last_sync: 0/260
 
 plan distribution (top 20):
-  'Free'                         117
+  'Free'                         118
   'Basic'                        43
   'N/A'                          42
   'Starter'                      26
@@ -22,4 +22,4 @@ plan distribution (top 20):
   'Premium'                      1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a3d4706976b7ef1140caf92', 'store_url': 'www.imagesupply.com image-supply.myshopify.com', 'username': 'www.imagesupply.com', 'email': 'michaelg@imagesupply.com', 'platforms': 'Shopify Michael', 'installed_on': '25/06/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '1', 'product_count': '1667', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Free', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a4da5df02690dc25b001b32', 'store_url': 'bakingcoach.com thebakingcoach.myshopify.com', 'username': 'bakingcoach.com', 'email': 'marina@bakingcoach.com', 'platforms': 'Shopify Michael', 'installed_on': '08/07/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '0', 'product_count': '74', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Free', 'last_sync': '', 'webhooks': 'View', 'action': ''}
