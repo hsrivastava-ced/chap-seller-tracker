@@ -28,7 +28,7 @@
   - pagination: ok
   - row_count_uninstalls: ok
       · Current uninstalls: 378 rows.
-      · Previous uninstalls: 377 rows. Drop: 0.0% (soft=20%, hard=50%).
+      · Previous uninstalls: 378 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shopify_temu_eu / sellers → OK ===
   - customize_grid: ok
@@ -87,7 +87,7 @@
   - pagination: ok
   - row_count_sellers: ok
       · Current sellers: 261 rows.
-      · Previous sellers: 260 rows. Drop: 0.0% (soft=20%, hard=50%).
+      · Previous sellers: 261 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === michael / uninstalls → BLOCKED ===
   - pagination: ok
