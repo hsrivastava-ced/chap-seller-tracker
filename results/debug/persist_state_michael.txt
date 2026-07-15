@@ -11,9 +11,9 @@ populated counts (non-empty):
 
 plan distribution (top 20):
   'Free'                         119
-  'Basic'                        44
+  'Basic'                        45
   'N/A'                          44
-  'Starter'                      24
+  'Starter'                      23
   'Standard'                     13
   'Advance'                      7
   'Custom'                       5
