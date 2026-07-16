@@ -1,19 +1,19 @@
 app: michael
-row_count: 262
+row_count: 263
 
 populated counts (non-empty):
-  plan: 262/262
-  order_count: 262/262
-  product_count: 262/262
-  failed_order_count: 262/262
-  steps_completed: 262/262
-  last_sync: 0/262
+  plan: 263/263
+  order_count: 263/263
+  product_count: 263/263
+  failed_order_count: 263/263
+  steps_completed: 263/263
+  last_sync: 0/263
 
 plan distribution (top 20):
-  'Free'                         120
+  'Free'                         119
+  'N/A'                          45
   'Basic'                        45
-  'N/A'                          44
-  'Starter'                      23
+  'Starter'                      24
   'Standard'                     13
   'Advance'                      7
   'Custom'                       5
@@ -22,4 +22,4 @@ plan distribution (top 20):
   'Premium'                      1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a5692aec6bace53180d6532', 'store_url': 'ancientketo.com ancientketo.myshopify.com', 'username': 'ancientketo.com', 'email': 'marketplaces.director@nexxuscap.com', 'platforms': 'Shopify Michael', 'installed_on': '14/07/2026', 'app_type': '', 'source_country': 'Canada', 'order_count': '0', 'product_count': '777', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Free', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a57c6c5175c751f44079ee3', 'store_url': 'makerstock.com maker-stock.myshopify.com', 'username': 'makerstock.com', 'email': 'info@makerstock.com', 'platforms': 'Shopify Michael', 'installed_on': '15/07/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '0', 'product_count': '3994', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}

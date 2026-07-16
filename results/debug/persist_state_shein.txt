@@ -1,13 +1,13 @@
 app: shein
-row_count: 333
+row_count: 332
 
 populated counts (non-empty):
-  plan: 333/333
-  order_count: 333/333
-  product_count: 333/333
-  failed_order_count: 333/333
-  steps_completed: 333/333
-  last_sync: 0/333
+  plan: 332/332
+  order_count: 332/332
+  product_count: 332/332
+  failed_order_count: 332/332
+  steps_completed: 332/332
+  last_sync: 0/332
 
 plan distribution (top 20):
   'N/A'                          222
@@ -15,8 +15,8 @@ plan distribution (top 20):
   'Basic'                        23
   'Standard'                     5
   'Plus'                         4
-  'Growth'                       2
   'Beginner'                     2
+  'Growth'                       1
   'Custom plan 380'              1
   'Enterprise Plus'              1
   'Combo with Tiktok Plan 300'   1
@@ -29,4 +29,4 @@ plan distribution (top 20):
   'Custom plan 4000'             1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a566e81d6d762f8bf0a1e82', 'store_url': 'ware-house-9506.myshopify.com', 'username': '0z89cz-ff.myshopify.com', 'email': 'app.tester88@shopify.com', 'platforms': 'Shopify Shein', 'installed_on': '14/07/2026', 'app_type': 'Sales Channel App', 'source_country': 'United States', 'order_count': '0', 'product_count': '13', 'failed_order_count': '0', 'steps_completed': '4', 'plan': 'Growth', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a39b923afb0285a06060222', 'store_url': 'greenhec.de', 'username': '7de1d3-2.myshopify.com', 'email': 'shopify@grooshandel.de', 'platforms': 'Shopify Shein', 'installed_on': '22/06/2026', 'app_type': 'Custom App', 'source_country': 'Germany', 'order_count': '0', 'product_count': '0', 'failed_order_count': '0', 'steps_completed': '2', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}

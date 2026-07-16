@@ -21,13 +21,13 @@
       · Unexpected extras: 0
   - pagination: ok
   - row_count_sellers: ok
-      · Current sellers: 333 rows.
-      · Previous sellers: 333 rows. Drop: 0.0% (soft=20%, hard=50%).
+      · Current sellers: 332 rows.
+      · Previous sellers: 333 rows. Drop: 0.3% (soft=20%, hard=50%).
 
 === shein / uninstalls → OK ===
   - pagination: ok
   - row_count_uninstalls: ok
-      · Current uninstalls: 385 rows.
+      · Current uninstalls: 386 rows.
       · Previous uninstalls: 385 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === shopify_temu_eu / sellers → OK ===
@@ -86,8 +86,8 @@
       · Unexpected extras: 0
   - pagination: ok
   - row_count_sellers: ok
-      · Current sellers: 262 rows.
-      · Previous sellers: 261 rows. Drop: 0.0% (soft=20%, hard=50%).
+      · Current sellers: 263 rows.
+      · Previous sellers: 262 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === michael / uninstalls → BLOCKED ===
   - pagination: ok
