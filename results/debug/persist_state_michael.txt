@@ -1,16 +1,16 @@
 app: michael
-row_count: 261
+row_count: 262
 
 populated counts (non-empty):
-  plan: 261/261
-  order_count: 261/261
-  product_count: 261/261
-  failed_order_count: 261/261
-  steps_completed: 261/261
-  last_sync: 0/261
+  plan: 262/262
+  order_count: 262/262
+  product_count: 262/262
+  failed_order_count: 262/262
+  steps_completed: 262/262
+  last_sync: 0/262
 
 plan distribution (top 20):
-  'Free'                         119
+  'Free'                         120
   'Basic'                        45
   'N/A'                          44
   'Starter'                      23
@@ -22,4 +22,4 @@ plan distribution (top 20):
   'Premium'                      1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a51617a774f0977af0c5f42', 'store_url': 'www.cartefini.com cartefini.myshopify.com', 'username': 'www.cartefini.com', 'email': 'mike@cartefini.com', 'platforms': 'Shopify Michael', 'installed_on': '10/07/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '1', 'product_count': '422', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Free', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a5692aec6bace53180d6532', 'store_url': 'ancientketo.com ancientketo.myshopify.com', 'username': 'ancientketo.com', 'email': 'marketplaces.director@nexxuscap.com', 'platforms': 'Shopify Michael', 'installed_on': '14/07/2026', 'app_type': '', 'source_country': 'Canada', 'order_count': '0', 'product_count': '777', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Free', 'last_sync': '', 'webhooks': 'View', 'action': ''}
