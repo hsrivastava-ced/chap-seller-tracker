@@ -10,9 +10,9 @@ populated counts (non-empty):
   last_sync: 0/331
 
 plan distribution (top 20):
-  'N/A'                          225
+  'N/A'                          224
   'Starter'                      64
-  'Basic'                        20
+  'Basic'                        21
   'Standard'                     6
   'Plus'                         3
   'Beginner'                     2
