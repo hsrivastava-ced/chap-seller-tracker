@@ -10,9 +10,10 @@ populated counts (non-empty):
   last_sync: 0/14
 
 plan distribution (top 20):
-  'Bronze'                       10
+  'Bronze'                       9
   'Silver'                       3
   'N/A'                          1
+  'Gold'                         1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
 first_row repr (truncated): {'seller_id': '6a4d542babd54a5cf008a064', 'store_url': 'wadsworthmusic.com', 'username': 'joleary@wadsworthmusic.com', 'email': 'joleary@wadsworthmusic.com', 'platforms': 'Shopify Gearexchange', 'installed_on': '07/07/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '0', 'product_count': '10', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}
