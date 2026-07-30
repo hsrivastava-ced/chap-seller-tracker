@@ -86,8 +86,8 @@
       · Unexpected extras: 0
   - pagination: ok
   - row_count_sellers: ok
-      · Current sellers: 264 rows.
-      · Previous sellers: 263 rows. Drop: 0.0% (soft=20%, hard=50%).
+      · Current sellers: 265 rows.
+      · Previous sellers: 264 rows. Drop: 0.0% (soft=20%, hard=50%).
 
 === michael / uninstalls → BLOCKED ===
   - pagination: ok

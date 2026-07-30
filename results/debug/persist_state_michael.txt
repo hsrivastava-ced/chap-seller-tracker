@@ -1,16 +1,16 @@
 app: michael
-row_count: 264
+row_count: 265
 
 populated counts (non-empty):
-  plan: 264/264
-  order_count: 264/264
-  product_count: 264/264
-  failed_order_count: 264/264
-  steps_completed: 264/264
-  last_sync: 0/264
+  plan: 265/265
+  order_count: 265/265
+  product_count: 265/265
+  failed_order_count: 265/265
+  steps_completed: 265/265
+  last_sync: 0/265
 
 plan distribution (top 20):
-  'Free'                         118
+  'Free'                         119
   'Basic'                        44
   'N/A'                          44
   'Starter'                      27
