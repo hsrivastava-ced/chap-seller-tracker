@@ -10,10 +10,11 @@ populated counts (non-empty):
   last_sync: 0/80
 
 plan distribution (top 20):
-  'N/A'                          57
+  'N/A'                          56
   'Starter'                      16
   'Trial'                        2
   'Premium'                      2
+  'Custom Plan'                  1
   'Yearly Custom Plan'           1
   'Custom Yearly'                1
   'Standard'                     1
