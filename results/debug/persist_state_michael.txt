@@ -1,16 +1,16 @@
 app: michael
-row_count: 266
+row_count: 267
 
 populated counts (non-empty):
-  plan: 266/266
-  order_count: 266/266
-  product_count: 266/266
-  failed_order_count: 266/266
-  steps_completed: 266/266
-  last_sync: 0/266
+  plan: 267/267
+  order_count: 267/267
+  product_count: 267/267
+  failed_order_count: 267/267
+  steps_completed: 267/267
+  last_sync: 0/267
 
 plan distribution (top 20):
-  'Free'                         118
+  'Free'                         119
   'N/A'                          45
   'Basic'                        44
   'Starter'                      29
@@ -22,4 +22,4 @@ plan distribution (top 20):
   'Premium'                      1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a6d00441a580eb9c5049a62', 'store_url': 'sweetdegreeskitchen.com sweet-degrees-kitchen.myshopify.com', 'username': 'sweetdegreeskitchen.com', 'email': 'info@sweetdegreeskitchen.com', 'platforms': 'Shopify Michael', 'installed_on': '31/07/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '2', 'product_count': '126', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Free', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a71f377ee90d9ccc80a0272', 'store_url': 'dixiebellepaint.com qiix00-1h.myshopify.com', 'username': 'dixiebellepaint.com', 'email': 'alex@dixiebellepaint.com', 'platforms': 'Shopify Michael', 'installed_on': '04/08/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '0', 'product_count': '836', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Free', 'last_sync': '', 'webhooks': 'View', 'action': ''}
