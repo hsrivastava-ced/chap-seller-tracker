@@ -10,14 +10,15 @@ populated counts (non-empty):
   last_sync: 0/74
 
 plan distribution (top 20):
-  'N/A'                          50
+  'N/A'                          49
   'Starter'                      13
   'Regular'                      3
   'Premium'                      3
   'Elite'                        2
+  'Trial'                        1
   'Elite Yearly'                 1
   'Custom Yearly'                1
   'Standard'                     1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a269613697d2c5ae30f4732', 'store_url': 'zjcpy3-9f.myshopify.com', 'username': 'gokul@ghuroobnet.com', 'email': 'gokul@ghuroobnet.com', 'platforms': 'Shopify Temu', 'installed_on': '08/06/2026', 'app_type': '', 'source_country': 'United Kingdom', 'order_count': '0', 'product_count': '68', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'N/A', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a7183eb1948f088d1005c02', 'store_url': 'glmall-dev-test.myshopify.com', 'username': 'avishwakrma@threecolts.com', 'email': 'avishwakrma@threecolts.com', 'platforms': 'Shopify Temu', 'installed_on': '04/08/2026', 'app_type': '', 'source_country': 'India', 'order_count': '1', 'product_count': '18', 'failed_order_count': '1', 'steps_completed': '0', 'plan': 'Trial', 'last_sync': '', 'webhooks': 'View', 'action': ''}
