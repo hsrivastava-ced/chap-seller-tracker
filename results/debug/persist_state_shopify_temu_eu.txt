@@ -11,8 +11,8 @@ populated counts (non-empty):
 
 plan distribution (top 20):
   'N/A'                          49
-  'Starter'                      13
-  'Regular'                      3
+  'Starter'                      12
+  'Regular'                      4
   'Premium'                      3
   'Elite'                        2
   'Trial'                        1
