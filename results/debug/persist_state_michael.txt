@@ -1,16 +1,16 @@
 app: michael
-row_count: 267
+row_count: 268
 
 populated counts (non-empty):
-  plan: 267/267
-  order_count: 267/267
-  product_count: 267/267
-  failed_order_count: 267/267
-  steps_completed: 267/267
-  last_sync: 0/267
+  plan: 268/268
+  order_count: 268/268
+  product_count: 268/268
+  failed_order_count: 268/268
+  steps_completed: 268/268
+  last_sync: 0/268
 
 plan distribution (top 20):
-  'Free'                         117
+  'Free'                         118
   'N/A'                          45
   'Basic'                        44
   'Starter'                      30
@@ -22,4 +22,4 @@ plan distribution (top 20):
   'Premium'                      1
 
 first_row keys: ['seller_id', 'store_url', 'username', 'email', 'platforms', 'installed_on', 'app_type', 'source_country', 'order_count', 'product_count', 'failed_order_count', 'steps_completed', 'plan', 'last_sync', 'webhooks', 'action']
-first_row repr (truncated): {'seller_id': '6a71f377ee90d9ccc80a0272', 'store_url': 'dixiebellepaint.com qiix00-1h.myshopify.com', 'username': 'dixiebellepaint.com', 'email': 'alex@dixiebellepaint.com', 'platforms': 'Shopify Michael', 'installed_on': '04/08/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '0', 'product_count': '837', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Free', 'last_sync': '', 'webhooks': 'View', 'action': ''}
+first_row repr (truncated): {'seller_id': '6a79fe74a8d793f59204d2e2', 'store_url': 'elsewareunplug.com e60b28-a6.myshopify.com', 'username': 'elsewareunplug.com', 'email': 'anthonyk@elsewareunplug.com', 'platforms': 'Shopify Michael', 'installed_on': '10/08/2026', 'app_type': '', 'source_country': 'United States', 'order_count': '0', 'product_count': '106', 'failed_order_count': '0', 'steps_completed': '0', 'plan': 'Free', 'last_sync': '', 'webhooks': 'View', 'action': ''}
