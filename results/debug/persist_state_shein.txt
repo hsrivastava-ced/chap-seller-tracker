@@ -15,7 +15,7 @@ plan distribution (top 20):
   'Basic'                        21
   'Standard'                     5
   'Plus'                         3
-  'Custom plan 380'              1
+  'Custom plan 260'              1
   'Enterprise Plus'              1
   'Combo with Tiktok Plan 300'   1
   'Enterprise Basic'             1
