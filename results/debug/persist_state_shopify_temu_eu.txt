@@ -1,17 +1,17 @@
 app: shopify_temu_eu
-row_count: 74
+row_count: 73
 
 populated counts (non-empty):
-  plan: 74/74
-  order_count: 74/74
-  product_count: 74/74
-  failed_order_count: 74/74
-  steps_completed: 74/74
-  last_sync: 0/74
+  plan: 73/73
+  order_count: 73/73
+  product_count: 73/73
+  failed_order_count: 73/73
+  steps_completed: 73/73
+  last_sync: 0/73
 
 plan distribution (top 20):
   'N/A'                          50
-  'Starter'                      12
+  'Starter'                      11
   'Regular'                      4
   'Premium'                      3
   'Elite'                        2
