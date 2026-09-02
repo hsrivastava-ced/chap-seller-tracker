@@ -40,9 +40,9 @@
 name: scrape-chap
 
 on:
-  schedule:
-    - cron: "30 18 * * *"   # 00:00 IST = previous-day 18:30 UTC
-    - cron: "30 6 * * *"    # 12:00 IST = same-day 06:30 UTC
+  # schedule:  # PAUSED 2026-09-02 — no longer needed; run manually via workflow_dispatch
+    # - cron: "30 18 * * *"   # 00:00 IST = previous-day 18:30 UTC
+    # - cron: "30 6 * * *"    # 12:00 IST = same-day 06:30 UTC
   workflow_dispatch:
     inputs:
       reason:

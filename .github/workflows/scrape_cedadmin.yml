@@ -21,10 +21,10 @@
 name: scrape-cedadmin
 
 on:
-  schedule:
+  # schedule:  # PAUSED 2026-09-02 — no longer needed; run manually via workflow_dispatch
     # Once a day at 06:30 UTC (12:00 IST) — same anchor as the noon
     # cHAP scrape so dashboards reload in roughly the same window.
-    - cron: "30 6 * * *"
+    # - cron: "30 6 * * *"
   workflow_dispatch:
     inputs:
       reason:
